@@ -105,6 +105,7 @@ export function PortfolioAdmin({
       const restored = mutateUndoLastCmsAction();
       if (restored) {
         syncState(restored);
+        void flushPendingCmsPush();
         toast.success("Undid last deletion and restored canvas items!");
       }
     } finally {
@@ -300,6 +301,7 @@ export function PortfolioAdmin({
       if (action.type === "delete-item") {
         const res = mutateDeleteCanvasItem(action.item.id);
         syncState(res);
+        void flushPendingCmsPush();
         toast.success("Removed item from canvas.", {
           action: {
             label: "Undo",
@@ -309,6 +311,7 @@ export function PortfolioAdmin({
       } else if (action.type === "clear-all") {
         const res = mutateClearAllCanvasItems();
         syncState(res);
+        void flushPendingCmsPush();
         toast.success("Cleared all items from the canvas.", {
           action: {
             label: "Undo",
@@ -330,6 +333,7 @@ export function PortfolioAdmin({
       const res = mutateRandomizeCanvasItemPosition(item.id);
       syncState(res, item.id);
       markRecentlyMoved(item.id);
+      void flushPendingCmsPush();
       const updatedItem = res.items.find((i) => i.id === item.id);
       toast.success(
         updatedItem
@@ -349,6 +353,7 @@ export function PortfolioAdmin({
     try {
       const res = mutateShuffleAllCanvasItems();
       syncState(res);
+      void flushPendingCmsPush();
       toast.success("Randomized all item positions across the canvas without overlap!");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to shuffle canvas");

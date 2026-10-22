@@ -72,7 +72,10 @@ function computeItemsSignature(items: PortfolioCanvasProject[]): string {
   let sig = `${items.length}:`;
   for (let i = 0; i < items.length; i += 1) {
     const p = items[i];
-    sig += `${p.id}@${p.canvasX},${p.canvasY},${p.width},${p.height},${p.title},${p.extraMedia?.length ?? 0};`;
+    const extrasSig = p.extraMedia
+      ? p.extraMedia.map((m) => `${m.id}@${m.canvasX},${m.canvasY},${m.imageUrl}`).join("|")
+      : "";
+    sig += `${p.id}@${p.canvasX},${p.canvasY},${p.width},${p.height},${p.title},${p.mediaType ?? ""},${p.imageUrl},${p.videoUrl ?? ""},[${extrasSig}];`;
   }
   return sig;
 }
@@ -726,11 +729,23 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
     const initialLocalItems = buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items;
     updateCmsItemsIfChanged(initialLocalItems);
 
+    const applyIncomingItemsAndCenterIfNeeded = (nextItems: PortfolioCanvasProject[]) => {
+      const nextSig = computeItemsSignature(nextItems);
+      const changed = nextSig !== lastSignatureRef.current;
+      updateCmsItemsIfChanged(nextItems);
+      if (changed && nextItems.length > 0 && camRef.current.mode !== "dragging") {
+        window.setTimeout(() => {
+          if (!active || camRef.current.mode === "dragging") return;
+          centerOnBestTarget(420);
+        }, 40);
+      }
+    };
+
     const syncFromServer = () => {
       void loadSynchronizedCmsState()
         .then((res) => {
           if (!active || !res?.items) return;
-          updateCmsItemsIfChanged(res.items);
+          applyIncomingItemsAndCenterIfNeeded(res.items);
         })
         .catch(() => {});
     };
@@ -740,16 +755,18 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
     const onCmsUpdated = (event: Event) => {
       const custom = event as CustomEvent<PortfolioCanvasProject[]>;
       if (Array.isArray(custom.detail)) {
-        updateCmsItemsIfChanged(custom.detail);
+        applyIncomingItemsAndCenterIfNeeded(custom.detail);
       } else {
-        updateCmsItemsIfChanged(buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items);
+        applyIncomingItemsAndCenterIfNeeded(
+          buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items,
+        );
       }
     };
 
     const onServerSynced = (event: Event) => {
       const custom = event as CustomEvent<{ items?: PortfolioCanvasProject[] }>;
       if (Array.isArray(custom.detail?.items)) {
-        updateCmsItemsIfChanged(custom.detail.items);
+        applyIncomingItemsAndCenterIfNeeded(custom.detail.items);
       }
     };
 
@@ -767,12 +784,16 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
     };
 
     const onStorage = () => {
-      updateCmsItemsIfChanged(buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items);
+      applyIncomingItemsAndCenterIfNeeded(
+        buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items,
+      );
     };
 
     const onVisibilityOrFocus = () => {
       if (document.visibilityState === "visible") {
-        updateCmsItemsIfChanged(buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items);
+        applyIncomingItemsAndCenterIfNeeded(
+          buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items,
+        );
         syncFromServer();
       }
     };
@@ -788,7 +809,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       if (document.visibilityState === "visible") {
         syncFromServer();
       }
-    }, 8000);
+    }, 2500);
 
     return () => {
       active = false;
@@ -800,7 +821,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       window.removeEventListener("focus", onVisibilityOrFocus);
       document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
-  }, [focusProjectOnCanvas, updateCmsItemsIfChanged]);
+  }, [centerOnBestTarget, focusProjectOnCanvas, updateCmsItemsIfChanged]);
 
   // Whenever items first populate on the canvas (from localStorage or cloud sync),
   // immediately center the camera on them so visitors never see an empty canvas.

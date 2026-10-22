@@ -11,7 +11,6 @@ import {
   type PortfolioCanvasProject,
   type PortfolioCanvasProjectInput,
 } from "@/data/portfolioProjects";
-import { supabase } from "@/integrations/supabase/client";
 
 export interface CanvasCmsStoreData {
   addedItems: PortfolioCanvasProject[];
@@ -41,15 +40,132 @@ const LOCAL_STORAGE_KEY = "grvnth_canvas_cms_store_v3";
 const BROADCAST_CHANNEL_NAME = "grvnth_canvas_cms_channel";
 const IDB_NAME = "grvnth_cms_media_idb";
 const IDB_STORE = "media_files";
-const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v4-";
+const IDB_STORE_BACKUP_KEY = "__cms_store_v5__";
+const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v5-";
+const LEGACY_SNAPSHOT_PREFIX = "cms-canvas-store-v4-";
+const SUPABASE_FALLBACK_URL = "https://jnolhqtsuyfckytngssa.supabase.co";
+const SUPABASE_FALLBACK_KEY = "sb_publishable_UtllKtAciWXasnSJ1VY35g_P5tiVA9W";
+const SUPABASE_BUCKET = "contact-attachments";
+const TEN_YEARS_SECONDS = 60 * 60 * 24 * 365 * 10;
 
 let memoryStore: CanvasCmsStoreData | null = null;
 const undoHistoryStack: CanvasCmsStoreData[] = [];
 let mutationVersion = 0;
 let pendingPushPromise: Promise<void> | null = null;
 const objectUrlCache = new Map<string, string>();
+const cloudSignedUrlCache = new Map<string, string>();
 const cloudUploadedKeys = new Set<string>();
 let broadcastChannel: BroadcastChannel | null = null;
+
+function getSupabaseRestConfig(): { url: string; key: string } {
+  const metaEnv = (
+    typeof import.meta !== "undefined" && import.meta.env ? import.meta.env : {}
+  ) as Record<string, string | undefined>;
+  const url = (metaEnv["VITE_SUPABASE_URL"] || SUPABASE_FALLBACK_URL).replace(/\/+$/, "");
+  const key = metaEnv["VITE_SUPABASE_PUBLISHABLE_KEY"] || SUPABASE_FALLBACK_KEY;
+  return { url, key };
+}
+
+async function uploadBlobToSupabaseRest(
+  storagePath: string,
+  blob: Blob,
+  contentType: string,
+): Promise<boolean> {
+  const { url, key } = getSupabaseRestConfig();
+  try {
+    const res = await fetch(`${url}/storage/v1/object/${SUPABASE_BUCKET}/${storagePath}`, {
+      method: "POST",
+      headers: {
+        apikey: key,
+        "Content-Type": contentType || "application/octet-stream",
+        "x-upsert": "false",
+      },
+      body: blob,
+    });
+    if (res.ok) return true;
+    const errText = await res.text().catch(() => "");
+    if (
+      errText.toLowerCase().includes("already exists") ||
+      errText.toLowerCase().includes("duplicate")
+    ) {
+      return true;
+    }
+  } catch {
+    // Ignore network error
+  }
+  return false;
+}
+
+async function createSupabaseSignedUrlRest(
+  storagePath: string,
+  expiresIn = TEN_YEARS_SECONDS,
+): Promise<string | null> {
+  const { url, key } = getSupabaseRestConfig();
+  try {
+    const res = await fetch(`${url}/storage/v1/object/sign/${SUPABASE_BUCKET}/${storagePath}`, {
+      method: "POST",
+      headers: {
+        apikey: key,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ expiresIn }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as { signedURL?: string } | null;
+    if (data?.signedURL) {
+      return `${url}/storage/v1${data.signedURL}`;
+    }
+  } catch {
+    // Ignore sign error
+  }
+  return null;
+}
+
+async function listSupabaseSnapshotsRest(
+  prefixSearch: string,
+  limit = 8,
+): Promise<Array<{ name: string }>> {
+  const { url, key } = getSupabaseRestConfig();
+  try {
+    const res = await fetch(`${url}/storage/v1/object/list/${SUPABASE_BUCKET}`, {
+      method: "POST",
+      headers: {
+        apikey: key,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prefix: "inquiries",
+        limit,
+        offset: 0,
+        search: prefixSearch,
+        sortBy: { column: "name", order: "desc" },
+      }),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json().catch(() => null)) as Array<{ name?: string }> | null;
+    if (!Array.isArray(data)) return [];
+    return data.filter((item): item is { name: string } => typeof item?.name === "string");
+  } catch {
+    return [];
+  }
+}
+
+async function downloadSupabaseObjectTextRest(storagePath: string): Promise<string | null> {
+  const { url, key } = getSupabaseRestConfig();
+  try {
+    const res = await fetch(`${url}/storage/v1/object/${SUPABASE_BUCKET}/${storagePath}`, {
+      method: "GET",
+      headers: {
+        apikey: key,
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
 
 function pushUndoSnapshot(store: CanvasCmsStoreData): void {
   undoHistoryStack.push(cloneStore(store));
@@ -156,6 +272,17 @@ function persistStoreLocally(store: CanvasCmsStoreData): void {
     window.sessionStorage.setItem(LOCAL_STORAGE_KEY, serialized);
   } catch {
     // Ignore quota or iframe errors
+  }
+  if (new Date(store.updatedAt || 0).getTime() > 0) {
+    void openMediaIdb().then((db) => {
+      if (!db) return;
+      try {
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).put(serialized, IDB_STORE_BACKUP_KEY);
+      } catch {
+        // Ignore IDB write error
+      }
+    });
   }
 }
 
@@ -545,39 +672,73 @@ export async function getMediaBlobFromIdb(
   });
 }
 
+async function readIdbStoreBackup(): Promise<CanvasCmsStoreData | null> {
+  const db = await openMediaIdb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).get(IDB_STORE_BACKUP_KEY);
+      req.onsuccess = () => {
+        if (typeof req.result === "string" && req.result.length > 2) {
+          try {
+            const parsed = normalizeStore(JSON.parse(req.result) as Partial<CanvasCmsStoreData>);
+            if (new Date(parsed.updatedAt || 0).getTime() > 0) {
+              resolve(parsed);
+              return;
+            }
+          } catch {
+            // Ignore parse error
+          }
+        }
+        resolve(null);
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 async function uploadMediaBlobToSupabaseCloud(key: string, blob: Blob): Promise<string | null> {
   if (!key || blob.size === 0 || blob.size > 50 * 1024 * 1024) return null;
+  const cachedSigned = cloudSignedUrlCache.get(key);
+  if (cachedSigned && cloudUploadedKeys.has(key)) {
+    return cachedSigned;
+  }
   try {
     const storagePath = `inquiries/${key}`;
     if (!cloudUploadedKeys.has(key)) {
-      const { error } = await supabase.storage
-        .from("contact-attachments")
-        .upload(storagePath, blob, {
-          contentType: blob.type || "application/octet-stream",
-          upsert: false,
-        });
-      if (!error || error.message?.toLowerCase().includes("already exists")) {
+      const uploaded = await uploadBlobToSupabaseRest(
+        storagePath,
+        blob,
+        blob.type || "application/octet-stream",
+      );
+      if (uploaded) {
         cloudUploadedKeys.add(key);
       }
     }
-    const { data: signed } = await supabase.storage
-      .from("contact-attachments")
-      .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
-    return signed?.signedUrl ?? null;
+    const signedUrl = await createSupabaseSignedUrlRest(storagePath, TEN_YEARS_SECONDS);
+    if (signedUrl) {
+      cloudSignedUrlCache.set(key, signedUrl);
+      return signedUrl;
+    }
   } catch {
-    return null;
+    // Ignore cloud upload error
   }
+  return null;
 }
 
-async function getCloudSignedUrlForMediaKey(key: string): Promise<string | null> {
+export async function getCloudSignedUrlForMediaKey(key: string): Promise<string | null> {
   if (!key) return null;
+  const cachedSigned = cloudSignedUrlCache.get(key);
+  if (cachedSigned) return cachedSigned;
   try {
-    const { data } = await supabase.storage
-      .from("contact-attachments")
-      .createSignedUrl(`inquiries/${key}`, 60 * 60 * 24 * 7);
-    if (data?.signedUrl) {
+    const signedUrl = await createSupabaseSignedUrlRest(`inquiries/${key}`, TEN_YEARS_SECONDS);
+    if (signedUrl) {
       cloudUploadedKeys.add(key);
-      return data.signedUrl;
+      cloudSignedUrlCache.set(key, signedUrl);
+      return signedUrl;
     }
   } catch {
     // Ignore cloud lookup error
@@ -585,13 +746,20 @@ async function getCloudSignedUrlForMediaKey(key: string): Promise<string | null>
   return null;
 }
 
-export async function getMediaObjectUrlFromIdb(key: string): Promise<string | null> {
-  const cached = objectUrlCache.get(key);
-  if (cached) return cached;
+export async function getMediaObjectUrlFromIdb(
+  key: string,
+  forceRefresh = false,
+): Promise<string | null> {
+  if (!forceRefresh) {
+    const cached = objectUrlCache.get(key);
+    if (cached) return cached;
+  } else {
+    objectUrlCache.delete(key);
+  }
 
   const found = await getMediaBlobFromIdb(key);
   if (found) {
-    const existingMatchedUrl = objectUrlCache.get(found.matchedKey);
+    const existingMatchedUrl = !forceRefresh ? objectUrlCache.get(found.matchedKey) : null;
     const url = existingMatchedUrl ?? URL.createObjectURL(found.blob);
     objectUrlCache.set(key, url);
     objectUrlCache.set(found.matchedKey, url);
@@ -599,7 +767,7 @@ export async function getMediaObjectUrlFromIdb(key: string): Promise<string | nu
     return url;
   }
 
-  // Fallback for visitors or new browser sessions: resolve signed URL directly from Supabase Storage
+  // Fallback for visitors or new browser sessions: resolve 10-year signed URL directly from Supabase Storage
   const cloudSignedUrl = await getCloudSignedUrlForMediaKey(key);
   if (cloudSignedUrl) {
     objectUrlCache.set(key, cloudSignedUrl);
@@ -619,6 +787,10 @@ export function extractMediaKeyFromUrl(url?: string | null): string | null {
     if (url.includes("inquiry=")) {
       const parsed = new URL(url, "http://localhost");
       return parsed.searchParams.get("inquiry");
+    }
+    const cloudMatch = url.match(/\/contact-attachments\/(?:inquiries|cms)\/([^?#&/]+)/i);
+    if (cloudMatch?.[1]) {
+      return decodeURIComponent(cloudMatch[1]);
     }
     if (url.startsWith("/media/")) {
       return url.slice("/media/".length).split("?")[0];
@@ -642,23 +814,14 @@ export function getCachedObjectUrlForMedia(url?: string | null): string | null {
   return objectUrlCache.get(key) ?? null;
 }
 
-async function isMediaUrlAvailable(url?: string | null): Promise<boolean> {
-  if (!url) return false;
+async function resolveBestDurableMediaUrl(url?: string | null): Promise<string | null> {
+  if (!url) return null;
   const trimmed = url.trim();
-  if (!trimmed) return false;
-
-  if (trimmed.startsWith("blob:")) {
-    try {
-      const res = await fetch(trimmed);
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
+  if (!trimmed) return null;
 
   const key = extractMediaKeyFromUrl(trimmed);
   if (!key || !key.startsWith("cms-")) {
-    return true;
+    return trimmed;
   }
 
   // 1. Check IndexedDB first
@@ -670,9 +833,7 @@ async function isMediaUrlAvailable(url?: string | null): Promise<boolean> {
       objectUrlCache.set(idbFound.matchedKey, objUrl);
     }
 
-    // Ensure Supabase Cloud and server both have a copy of this blob
-    void uploadMediaBlobToSupabaseCloud(key, idbFound.blob);
-
+    // Re-hydrate local server in background if missing
     void fetch(`/api/drive-media?local=${encodeURIComponent(key)}&check=1`)
       .then((r) => (r.ok ? (r.json() as Promise<{ exists?: boolean }>) : null))
       .then((status) => {
@@ -692,17 +853,22 @@ async function isMediaUrlAvailable(url?: string | null): Promise<boolean> {
       })
       .catch(() => {});
 
-    return true;
+    // Ensure Supabase Cloud has a copy and return 10-year CDN signed URL so store URLs survive any container rebuild
+    const cloudSigned = await uploadMediaBlobToSupabaseCloud(key, idbFound.blob);
+    if (cloudSigned) {
+      return cloudSigned;
+    }
+    return trimmed;
   }
 
   // 2. Check Supabase Cloud signed URL directly
   const cloudSigned = await getCloudSignedUrlForMediaKey(key);
   if (cloudSigned) {
     objectUrlCache.set(key, cloudSigned);
-    return true;
+    return cloudSigned;
   }
 
-  // 3. Not in IndexedDB: check if the server has the file
+  // 3. Check if server has the file and hydrate IndexedDB + Cloud
   try {
     const checkRes = await fetch(`/api/drive-media?local=${encodeURIComponent(key)}&check=1`, {
       cache: "no-store",
@@ -710,25 +876,23 @@ async function isMediaUrlAvailable(url?: string | null): Promise<boolean> {
     if (checkRes.ok) {
       const data = (await checkRes.json()) as { exists?: boolean };
       if (data.exists) {
-        // Hydrate IndexedDB in the background from server
-        void fetch(`/api/drive-media?local=${encodeURIComponent(key)}`)
-          .then((r) => (r.ok ? r.blob() : null))
-          .then((blob) => {
-            if (blob && blob.size > 0) {
-              void saveMediaBlobToIdb(key, blob);
-              void uploadMediaBlobToSupabaseCloud(key, blob);
-            }
-          })
-          .catch(() => {});
-        return true;
+        const mediaRes = await fetch(`/api/drive-media?local=${encodeURIComponent(key)}`);
+        if (mediaRes.ok) {
+          const blob = await mediaRes.blob();
+          if (blob.size > 0) {
+            await saveMediaBlobToIdb(key, blob);
+            const uploadedSigned = await uploadMediaBlobToSupabaseCloud(key, blob);
+            if (uploadedSigned) return uploadedSigned;
+          }
+        }
+        return trimmed;
       }
-      return false;
     }
   } catch {
     // Ignore network error
   }
 
-  return false;
+  return trimmed;
 }
 
 async function healAndValidateStoreMedia(
@@ -738,24 +902,160 @@ async function healAndValidateStoreMedia(
     return { store, modified: false };
   }
 
-  // Non-destructively hydrate media between IndexedDB and server in the background.
-  // Never delete or prune items from addedItems or overrides.
-  for (const item of store.addedItems) {
-    const primaryUrl = item.videoUrl || item.imageUrl;
-    if (primaryUrl) {
-      void isMediaUrlAvailable(primaryUrl);
-    }
-    if (item.extraMedia && item.extraMedia.length > 0) {
-      for (const extra of item.extraMedia) {
-        const extraUrl = extra.videoUrl || extra.imageUrl;
-        if (extraUrl) {
-          void isMediaUrlAvailable(extraUrl);
+  let modified = false;
+
+  await Promise.all(
+    store.addedItems.map(async (item, idx) => {
+      const primaryUrl = item.videoUrl || item.imageUrl;
+      if (primaryUrl) {
+        const upgraded = await resolveBestDurableMediaUrl(primaryUrl);
+        if (upgraded && upgraded !== primaryUrl && primaryUrl.includes("local=")) {
+          store.addedItems[idx] = {
+            ...store.addedItems[idx],
+            imageUrl: upgraded,
+            ...(item.mediaType === "video" || item.videoUrl ? { videoUrl: upgraded } : {}),
+          };
+          modified = true;
         }
       }
-    }
+
+      if (item.extraMedia && item.extraMedia.length > 0) {
+        const updatedExtras = [...item.extraMedia];
+        let extrasChanged = false;
+        for (let eIdx = 0; eIdx < updatedExtras.length; eIdx += 1) {
+          const extra = updatedExtras[eIdx];
+          const extraUrl = extra.videoUrl || extra.imageUrl;
+          if (extraUrl) {
+            const upgradedExtra = await resolveBestDurableMediaUrl(extraUrl);
+            if (upgradedExtra && upgradedExtra !== extraUrl && extraUrl.includes("local=")) {
+              updatedExtras[eIdx] = {
+                ...extra,
+                imageUrl: upgradedExtra,
+                ...(extra.mediaType === "video" || extra.videoUrl
+                  ? { videoUrl: upgradedExtra }
+                  : {}),
+              };
+              extrasChanged = true;
+              modified = true;
+            }
+          }
+        }
+        if (extrasChanged) {
+          store.addedItems[idx] = {
+            ...store.addedItems[idx],
+            extraMedia: updatedExtras,
+          };
+        }
+      }
+    }),
+  );
+
+  return { store, modified };
+}
+
+/**
+ * If all stores are uninitialized (epoch 0, 0 items, 0 deletedIds) — e.g. after a wiped snapshot —
+ * automatically checks IndexedDB for any previously uploaded `cms-...` blobs and reconstructs them
+ * onto the canvas so the user never has to re-upload existing work.
+ */
+async function recoverOrphanedIdbMediaIfStoreEmpty(
+  store: CanvasCmsStoreData,
+): Promise<{ store: CanvasCmsStoreData; recovered: boolean }> {
+  const storeTime = new Date(store.updatedAt || 0).getTime();
+  if (storeTime > 0 || store.addedItems.length > 0 || store.deletedIds.length > 0) {
+    return { store, recovered: false };
   }
 
-  return { store, modified: false };
+  const db = await openMediaIdb();
+  if (!db) return { store, recovered: false };
+
+  const cmsEntries = await new Promise<Array<{ key: string; blob: Blob }>>((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const objStore = tx.objectStore(IDB_STORE);
+      const keysReq = objStore.getAllKeys();
+      keysReq.onsuccess = () => {
+        const allKeys = (keysReq.result ?? [])
+          .map((k) => String(k))
+          .filter((k) => k.startsWith("cms-"));
+        if (allKeys.length === 0) {
+          resolve([]);
+          return;
+        }
+        const collected: Array<{ key: string; blob: Blob }> = [];
+        let remaining = allKeys.length;
+        for (const k of allKeys) {
+          const getReq = objStore.get(k);
+          getReq.onsuccess = () => {
+            if (getReq.result instanceof Blob && getReq.result.size > 0) {
+              collected.push({ key: k, blob: getReq.result });
+            }
+            remaining -= 1;
+            if (remaining === 0) resolve(collected);
+          };
+          getReq.onerror = () => {
+            remaining -= 1;
+            if (remaining === 0) resolve(collected);
+          };
+        }
+      };
+      keysReq.onerror = () => resolve([]);
+    } catch {
+      resolve([]);
+    }
+  });
+
+  if (cmsEntries.length === 0) {
+    return { store, recovered: false };
+  }
+
+  // Deduplicate by filename suffix so we don't create duplicate items for the same file
+  const uniqueBySuffix = new Map<string, { key: string; blob: Blob }>();
+  for (const entry of cmsEntries) {
+    const suffix = getCmsKeySuffix(entry.key) || entry.key;
+    uniqueBySuffix.set(suffix, entry);
+  }
+
+  const nextStore = cloneStore(store);
+  const occupiedRects: CanvasRect[] = [];
+
+  for (const { key, blob } of uniqueBySuffix.values()) {
+    const objUrl = URL.createObjectURL(blob);
+    objectUrlCache.set(key, objUrl);
+
+    const ext = key.split(".").pop()?.toLowerCase() ?? "";
+    const isVideo =
+      blob.type.startsWith("video/") ||
+      ["mp4", "webm", "mov", "m4v", "mkv", "avi", "ogg", "ogv"].includes(ext);
+    const width = isVideo ? 270 : 310;
+    const height = isVideo ? 380 : 310;
+    const pos = findDistinctRandomCanvasPosition(occupiedRects, width, height, undefined, true);
+    occupiedRects.push({ canvasX: pos.canvasX, canvasY: pos.canvasY, width, height });
+
+    const cloudUrl = await uploadMediaBlobToSupabaseCloud(key, blob);
+    const finalUrl = cloudUrl || `/api/drive-media?local=${encodeURIComponent(key)}`;
+    const rawSlug = getCmsKeySuffix(key).replace(/\.[^.]+$/, "");
+    const title =
+      rawSlug.replace(/[-_]+/g, " ").trim() || (isVideo ? "Studio Video" : "Studio Artwork");
+
+    nextStore.addedItems.push({
+      id: `item-${key}`,
+      title,
+      description: "",
+      year: new Date().getFullYear().toString(),
+      mediaType: isVideo ? "video" : "image",
+      imageUrl: finalUrl,
+      videoUrl: isVideo ? finalUrl : undefined,
+      canvasX: pos.canvasX,
+      canvasY: pos.canvasY,
+      width,
+      height,
+    });
+  }
+
+  nextStore.updatedAt = new Date().toISOString();
+  settleStoreNonOverlappingPositions(nextStore);
+  return { store: nextStore, recovered: true };
 }
 
 export function reportUnavailableCmsMedia(_failedUrl?: string | null): void {
@@ -974,7 +1274,10 @@ export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMedi
       // IndexedDB + Supabase Cloud already hold localKey
     }
 
-    await cloudUploadPromise.catch(() => null);
+    const cloudSignedUrl = await cloudUploadPromise.catch(() => null);
+    if (cloudSignedUrl) {
+      finalUrl = cloudSignedUrl;
+    }
 
     results.push({
       url: finalUrl,
@@ -998,54 +1301,63 @@ export function mergeCmsStores(
 ): CanvasCmsStoreData {
   const pTime = new Date(primary.updatedAt || 0).getTime();
   const sTime = new Date(secondary.updatedAt || 0).getTime();
+
+  // An initialized store (updatedAt > 0) always wins over an uninitialized epoch store (updatedAt <= 0)
+  if (pTime > 0 && sTime <= 0) {
+    return cloneStore(primary);
+  }
+  if (sTime > 0 && pTime <= 0) {
+    return cloneStore(secondary);
+  }
+  if (pTime <= 0 && sTime <= 0) {
+    return createEmptyStore();
+  }
+
   const newer = pTime >= sTime ? primary : secondary;
   const older = pTime >= sTime ? secondary : primary;
+  const newerTime = Math.max(pTime, sTime);
+  const olderTime = Math.min(pTime, sTime);
 
-  const deletedSet = new Set<string>([...primary.deletedIds, ...secondary.deletedIds]);
+  // When one store has a strictly newer timestamp, its deletedIds, overrides, and item coordinates
+  // are authoritative so Undo, Random Pos, Shuffle All, Delete, and Clear All never get reverted.
+  const deletedSet =
+    newerTime > olderTime
+      ? new Set<string>(newer.deletedIds)
+      : new Set<string>([...newer.deletedIds, ...older.deletedIds]);
 
-  const itemMap = new Map<string, PortfolioCanvasProject>();
-  for (const item of older.addedItems) {
-    if (!deletedSet.has(item.id)) {
-      itemMap.set(item.id, item);
-    }
-  }
-  for (const item of newer.addedItems) {
-    if (!deletedSet.has(item.id)) {
-      itemMap.set(item.id, item);
-    }
-  }
-
-  // Preserve order: newer items first, followed by any non-deleted items from older store
   const mergedAddedItems: PortfolioCanvasProject[] = [];
   const seenIds = new Set<string>();
+
   for (const item of newer.addedItems) {
     if (!deletedSet.has(item.id) && !seenIds.has(item.id)) {
       seenIds.add(item.id);
-      mergedAddedItems.push(itemMap.get(item.id)!);
-    }
-  }
-  for (const item of older.addedItems) {
-    if (!deletedSet.has(item.id) && !seenIds.has(item.id)) {
-      seenIds.add(item.id);
-      mergedAddedItems.push(itemMap.get(item.id)!);
+      mergedAddedItems.push(item);
     }
   }
 
-  const mergedOverrides: Record<string, Partial<PortfolioCanvasProject>> = {
-    ...older.overrides,
-    ...newer.overrides,
-  };
+  // Only include items from older store if they weren't deleted and newer wasn't a full clear
+  if (newer.addedItems.length > 0 || newer.deletedIds.length === 0) {
+    for (const item of older.addedItems) {
+      if (!deletedSet.has(item.id) && !seenIds.has(item.id)) {
+        seenIds.add(item.id);
+        mergedAddedItems.push(item);
+      }
+    }
+  }
+
+  const mergedOverrides: Record<string, Partial<PortfolioCanvasProject>> = newerTime > olderTime
+    ? { ...newer.overrides }
+    : { ...older.overrides, ...newer.overrides };
+
   for (const delId of deletedSet) {
     delete mergedOverrides[delId];
   }
-
-  const maxTime = Math.max(pTime, sTime, 0);
 
   return {
     addedItems: mergedAddedItems,
     deletedIds: Array.from(deletedSet),
     overrides: mergedOverrides,
-    updatedAt: maxTime > 0 ? new Date(maxTime).toISOString() : new Date(0).toISOString(),
+    updatedAt: new Date(newerTime).toISOString(),
     ...(newer.lastFocusedId && !deletedSet.has(newer.lastFocusedId)
       ? { lastFocusedId: newer.lastFocusedId }
       : older.lastFocusedId && !deletedSet.has(older.lastFocusedId)
@@ -1056,43 +1368,54 @@ export function mergeCmsStores(
 
 async function readCloudCmsStoreSnapshot(): Promise<CanvasCmsStoreData | null> {
   try {
-    const { data: files, error: listErr } = await supabase.storage
-      .from("contact-attachments")
-      .list("inquiries", {
-        limit: 5,
-        search: CMS_SNAPSHOT_PREFIX,
-        sortBy: { column: "name", order: "desc" },
-      });
-    if (listErr || !files || files.length === 0) return null;
+    const v5Files = await listSupabaseSnapshotsRest(CMS_SNAPSHOT_PREFIX, 8);
+    for (const file of v5Files) {
+      const text = await downloadSupabaseObjectTextRest(`inquiries/${file.name}`);
+      if (!text) continue;
+      try {
+        const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
+        if (new Date(parsed.updatedAt || 0).getTime() > 0) {
+          return parsed;
+        }
+      } catch {
+        // Try next snapshot
+      }
+    }
 
-    const latest = files[0];
-    if (!latest?.name) return null;
-
-    const { data: blob, error: dlErr } = await supabase.storage
-      .from("contact-attachments")
-      .download(`inquiries/${latest.name}`);
-    if (dlErr || !blob) return null;
-
-    const text = await blob.text();
-    const parsed = JSON.parse(text) as Partial<CanvasCmsStoreData>;
-    return normalizeStore(parsed);
+    // Fallback to non-empty v4 snapshots if no v5 snapshot exists yet
+    const v4Files = await listSupabaseSnapshotsRest(LEGACY_SNAPSHOT_PREFIX, 10);
+    for (const file of v4Files) {
+      const text = await downloadSupabaseObjectTextRest(`inquiries/${file.name}`);
+      if (!text) continue;
+      try {
+        const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
+        const t = new Date(parsed.updatedAt || 0).getTime();
+        if (t > 0 && (parsed.addedItems.length > 0 || parsed.deletedIds.length > 0)) {
+          return parsed;
+        }
+      } catch {
+        // Try next snapshot
+      }
+    }
   } catch {
-    return null;
+    // Ignore cloud read error
   }
+  return null;
 }
 
 async function writeCloudCmsStoreSnapshot(store: CanvasCmsStoreData): Promise<void> {
   try {
-    const ts = Math.max(Date.now(), new Date(store.updatedAt || 0).getTime());
+    const storeTime = new Date(store.updatedAt || 0).getTime();
+    // Never upload an uninitialized epoch-0 store to cloud snapshots
+    if (storeTime <= 0) return;
+
+    const ts = Math.max(Date.now(), storeTime);
     const paddedTs = String(ts).padStart(15, "0");
     const rand = Math.random().toString(36).slice(2, 7);
     const snapName = `${CMS_SNAPSHOT_PREFIX}${paddedTs}-${rand}.json`;
     const blob = new Blob([JSON.stringify(store)], { type: "application/json" });
 
-    await supabase.storage.from("contact-attachments").upload(`inquiries/${snapName}`, blob, {
-      contentType: "application/json",
-      upsert: false,
-    });
+    await uploadBlobToSupabaseRest(`inquiries/${snapName}`, blob, "application/json");
   } catch {
     // Ignore cloud snapshot error
   }
@@ -1148,7 +1471,7 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
   const versionBeforeFetch = mutationVersion;
   let chosenStore = readLocalCmsStore();
 
-  const [serverResult, cloudResult] = await Promise.allSettled([
+  const [serverResult, cloudResult, idbBackupResult] = await Promise.allSettled([
     fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
       method: "GET",
       cache: "no-store",
@@ -1162,6 +1485,7 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
       return data?.store ? normalizeStore(data.store) : null;
     }),
     readCloudCmsStoreSnapshot(),
+    readIdbStoreBackup(),
   ]);
 
   if (mutationVersion !== versionBeforeFetch) {
@@ -1171,9 +1495,13 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
   const latestLocalStore = readLocalCmsStore();
   chosenStore = latestLocalStore;
 
+  const idbBackupStore = idbBackupResult.status === "fulfilled" ? idbBackupResult.value : null;
   const serverStore = serverResult.status === "fulfilled" ? serverResult.value : null;
   const cloudStore = cloudResult.status === "fulfilled" ? cloudResult.value : null;
 
+  if (idbBackupStore) {
+    chosenStore = mergeCmsStores(chosenStore, idbBackupStore);
+  }
   if (serverStore) {
     chosenStore = mergeCmsStores(chosenStore, serverStore);
   }
@@ -1181,18 +1509,36 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
     chosenStore = mergeCmsStores(chosenStore, cloudStore);
   }
 
-  await healAndValidateStoreMedia(chosenStore);
+  // If all stores are still uninitialized (epoch 0), check if IndexedDB has orphaned cms-* media blobs
+  const recovery = await recoverOrphanedIdbMediaIfStoreEmpty(chosenStore);
+  if (recovery.recovered) {
+    chosenStore = recovery.store;
+  }
+
+  const healed = await healAndValidateStoreMedia(chosenStore);
+  if (healed.modified) {
+    chosenStore = {
+      ...healed.store,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   persistStoreLocally(chosenStore);
 
-  // If our merged store has items that weren't in cloudStore or serverStore yet, push to keep all layers synced
-  const cloudCount = cloudStore?.addedItems.length ?? 0;
-  const serverCount = serverStore?.addedItems.length ?? 0;
+  const serverTime = new Date(serverStore?.updatedAt || 0).getTime();
+  const cloudTime = new Date(cloudStore?.updatedAt || 0).getTime();
+  const chosenTime = new Date(chosenStore.updatedAt || 0).getTime();
+
   if (
-    chosenStore.addedItems.length > cloudCount ||
-    chosenStore.addedItems.length > serverCount ||
-    chosenStore.deletedIds.length > (cloudStore?.deletedIds.length ?? 0)
+    chosenTime > 0 &&
+    (recovery.recovered ||
+      healed.modified ||
+      chosenTime > serverTime ||
+      chosenTime > cloudTime ||
+      chosenStore.addedItems.length !== (cloudStore?.addedItems.length ?? 0) ||
+      chosenStore.addedItems.length !== (serverStore?.addedItems.length ?? 0))
   ) {
-    void pushStoreToServer(chosenStore);
+    void pushStoreToServer(chosenStore, true);
   }
 
   return buildResolvedCanvasItemsFromStore(chosenStore);

@@ -103,11 +103,17 @@ export function isVideoSource(src?: string | null): boolean {
 function useResolvedMediaState(src?: string | null): { url: string; isResolving: boolean } {
   const normalized = normalizeCmsMediaUrl(src);
   const key = extractMediaKeyFromUrl(normalized);
+  const isUnresolvedLocalCmsUrl = Boolean(
+    key && key.startsWith("cms-") && normalized.includes("local="),
+  );
 
   const [state, setState] = useState<{ url: string; isResolving: boolean }>(() => {
     if (!normalized) return { url: "", isResolving: false };
     const immediate = getCachedObjectUrlForMedia(normalized);
     if (immediate) return { url: immediate, isResolving: false };
+    if (isUnresolvedLocalCmsUrl) {
+      return { url: "", isResolving: true };
+    }
     return { url: normalized, isResolving: false };
   });
 
@@ -125,32 +131,48 @@ function useResolvedMediaState(src?: string | null): { url: string; isResolving:
       return;
     }
 
-    // Render normalized URL immediately so cards never flash a blank skeleton,
-    // and only resolve from IndexedDB if not already a blob URL.
-    setState((prev) =>
-      prev.url === normalized && !prev.isResolving ? prev : { url: normalized, isResolving: false },
-    );
-
     if (!key) {
+      setState((prev) =>
+        prev.url === normalized && !prev.isResolving
+          ? prev
+          : { url: normalized, isResolving: false },
+      );
       return;
     }
 
+    // If this is a local=/api/drive-media URL whose IndexedDB/Cloud URL is not yet in memory cache,
+    // wait for IndexedDB/Cloud resolution first so the browser never fires a doomed 404 on Frame 0.
+    if (isUnresolvedLocalCmsUrl) {
+      setState((prev) => (prev.isResolving ? prev : { url: "", isResolving: true }));
+    } else {
+      setState((prev) =>
+        prev.url === normalized && !prev.isResolving
+          ? prev
+          : { url: normalized, isResolving: false },
+      );
+    }
+
     let active = true;
-    void getMediaObjectUrlFromIdb(key).then((blobUrl) => {
-      if (!active || !blobUrl) return;
-      // Only switch to blobUrl if we haven't already settled on the same URL
-      setState((prev) => {
-        if (prev.url === blobUrl) return prev;
-        // If the element is already using a valid http/media URL, keep it stable unless it's a local-only key
-        if (prev.url && !prev.url.includes("local=")) return prev;
-        return { url: blobUrl, isResolving: false };
-      });
+    void getMediaObjectUrlFromIdb(key).then((resolvedUrl) => {
+      if (!active) return;
+      if (resolvedUrl) {
+        setState((prev) => {
+          if (prev.url === resolvedUrl && !prev.isResolving) return prev;
+          return { url: resolvedUrl, isResolving: false };
+        });
+      } else {
+        setState((prev) =>
+          prev.url === normalized && !prev.isResolving
+            ? prev
+            : { url: normalized, isResolving: false },
+        );
+      }
     });
 
     return () => {
       active = false;
     };
-  }, [normalized, key]);
+  }, [normalized, key, isUnresolvedLocalCmsUrl]);
 
   return state;
 }
@@ -342,10 +364,10 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       }}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
-        if (key && !activeVideoSrc.startsWith("blob:")) {
-          void getMediaObjectUrlFromIdb(key).then((blobUrl) => {
-            if (blobUrl && blobUrl !== activeVideoSrc) {
-              setOverrideSrc(blobUrl);
+        if (key) {
+          void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
+            if (freshUrl && freshUrl !== activeVideoSrc) {
+              setOverrideSrc(freshUrl);
               setFailed(false);
             } else {
               setFailed(true);
@@ -472,10 +494,10 @@ export function InteractiveVideo({
       className={className}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
-        if (key && !activeVideoSrc.startsWith("blob:")) {
-          void getMediaObjectUrlFromIdb(key).then((blobUrl) => {
-            if (blobUrl && blobUrl !== activeVideoSrc) {
-              setOverrideSrc(blobUrl);
+        if (key) {
+          void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
+            if (freshUrl && freshUrl !== activeVideoSrc) {
+              setOverrideSrc(freshUrl);
               setFailed(false);
             } else {
               setFailed(true);
@@ -596,10 +618,10 @@ export const MediaImage = memo(function MediaImage({
           return;
         }
         const key = extractMediaKeyFromUrl(src);
-        if (key && !currentSrc.startsWith("blob:")) {
-          void getMediaObjectUrlFromIdb(key).then((blobUrl) => {
-            if (blobUrl && blobUrl !== currentSrc) {
-              setOverrideSrc(blobUrl);
+        if (key) {
+          void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
+            if (freshUrl && freshUrl !== currentSrc) {
+              setOverrideSrc(freshUrl);
               setFailed(false);
             } else {
               setFailed(true);

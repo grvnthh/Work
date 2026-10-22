@@ -43,16 +43,60 @@ function safeDecodeURIComponent(val: string): string {
   }
 }
 
-const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v4-";
+const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v5-";
+const LEGACY_SNAPSHOT_PREFIX = "cms-canvas-store-v4-";
+const SUPABASE_FALLBACK_URL = "https://jnolhqtsuyfckytngssa.supabase.co";
+const SUPABASE_FALLBACK_KEY = "sb_publishable_UtllKtAciWXasnSJ1VY35g_P5tiVA9W";
+const SUPABASE_BUCKET = "contact-attachments";
+const TEN_YEARS_SECONDS = 60 * 60 * 24 * 365 * 10;
 
-function getServerSupabaseCredentials(): { url: string; key: string } | null {
-  const url = process.env["SUPABASE_URL"] || process.env["VITE_SUPABASE_URL"];
+function getServerSupabaseCredentials(): { url: string; key: string } {
+  const metaEnv = (
+    typeof import.meta !== "undefined" && import.meta.env ? import.meta.env : {}
+  ) as Record<string, string | undefined>;
+  const url = (
+    process.env["SUPABASE_URL"] ||
+    process.env["VITE_SUPABASE_URL"] ||
+    metaEnv["VITE_SUPABASE_URL"] ||
+    SUPABASE_FALLBACK_URL
+  ).replace(/\/+$/, "");
   const key =
     process.env["SUPABASE_SERVICE_ROLE_KEY"] ||
     process.env["SUPABASE_PUBLISHABLE_KEY"] ||
-    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
-  if (!url || !key) return null;
+    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"] ||
+    metaEnv["VITE_SUPABASE_PUBLISHABLE_KEY"] ||
+    SUPABASE_FALLBACK_KEY;
   return { url, key };
+}
+
+function buildSupabaseHeaders(key: string, extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    apikey: key,
+    ...(extra ?? {}),
+  };
+  if (!key.startsWith("sb_publishable_")) {
+    headers["Authorization"] = `Bearer ${key}`;
+  }
+  return headers;
+}
+
+async function createServerSupabaseSignedUrl(storagePath: string): Promise<string | null> {
+  const { url, key } = getServerSupabaseCredentials();
+  try {
+    const res = await fetch(`${url}/storage/v1/object/sign/${SUPABASE_BUCKET}/${storagePath}`, {
+      method: "POST",
+      headers: buildSupabaseHeaders(key, { "Content-Type": "application/json" }),
+      body: JSON.stringify({ expiresIn: TEN_YEARS_SECONDS }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as { signedURL?: string } | null;
+    if (data?.signedURL) {
+      return `${url}/storage/v1${data.signedURL}`;
+    }
+  } catch {
+    // Ignore error
+  }
+  return null;
 }
 
 async function uploadBufferToSupabaseStorage(
@@ -61,126 +105,145 @@ async function uploadBufferToSupabaseStorage(
   buffer: Buffer,
   mimeType: string,
 ): Promise<string | null> {
-  const creds = getServerSupabaseCredentials();
-  if (!creds) return null;
-
+  const { url, key } = getServerSupabaseCredentials();
   try {
-    const { createClient } = await import("@supabase/supabase-js");
-    const client = createClient(creds.url, creds.key, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    // Always use inquiries/ prefix with upsert: false to satisfy public RLS INSERT/SELECT policies
+    // Always use inquiries/ prefix with x-upsert: false to satisfy public RLS INSERT/SELECT policies
     const storagePath = `inquiries/${uniqueName}`;
-    const { error: uploadError } = await client.storage
-      .from("contact-attachments")
-      .upload(storagePath, buffer, {
-        contentType: mimeType || "application/octet-stream",
-        upsert: false,
-      });
+    const res = await fetch(`${url}/storage/v1/object/${SUPABASE_BUCKET}/${storagePath}`, {
+      method: "POST",
+      headers: buildSupabaseHeaders(key, {
+        "Content-Type": mimeType || "application/octet-stream",
+        "x-upsert": "false",
+      }),
+      body: new Uint8Array(buffer),
+    });
 
-    if (uploadError && !uploadError.message?.toLowerCase().includes("already exists")) {
-      return null;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      if (
+        !errText.toLowerCase().includes("already exists") &&
+        !errText.toLowerCase().includes("duplicate")
+      ) {
+        return null;
+      }
     }
 
-    const { data: signed30d } = await client.storage
-      .from("contact-attachments")
-      .createSignedUrl(storagePath, 60 * 60 * 24 * 30);
-    if (signed30d?.signedUrl) return signed30d.signedUrl;
-
-    const { data: signed7d } = await client.storage
-      .from("contact-attachments")
-      .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
-    if (signed7d?.signedUrl) return signed7d.signedUrl;
+    return await createServerSupabaseSignedUrl(storagePath);
   } catch {
-    // Ignore Supabase fallback error
+    return null;
   }
-  return null;
 }
 
 async function getSupabaseStorageSignedUrl(
   folder: "inquiries" | "cms",
   safeName: string,
 ): Promise<string | null> {
-  const creds = getServerSupabaseCredentials();
-  if (!creds) return null;
+  const primarySigned = await createServerSupabaseSignedUrl(`inquiries/${safeName}`);
+  if (primarySigned) return primarySigned;
 
-  try {
-    const { createClient } = await import("@supabase/supabase-js");
-    const client = createClient(creds.url, creds.key, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-
-    const primaryPath = `inquiries/${safeName}`;
-    const { data: primaryData } = await client.storage
-      .from("contact-attachments")
-      .createSignedUrl(primaryPath, 60 * 60 * 24 * 7);
-    if (primaryData?.signedUrl) return primaryData.signedUrl;
-
-    if (folder !== "inquiries") {
-      const fallbackPath = `${folder}/${safeName}`;
-      const { data: fallbackData } = await client.storage
-        .from("contact-attachments")
-        .createSignedUrl(fallbackPath, 60 * 60 * 24 * 7);
-      if (fallbackData?.signedUrl) return fallbackData.signedUrl;
-    }
-  } catch {
-    // Ignore error
+  if (folder !== "inquiries") {
+    const fallbackSigned = await createServerSupabaseSignedUrl(`${folder}/${safeName}`);
+    if (fallbackSigned) return fallbackSigned;
   }
   return null;
 }
 
-async function readSupabaseCanvasCmsStore(): Promise<CanvasCmsStoreData | null> {
-  const creds = getServerSupabaseCredentials();
-  if (!creds) return null;
-
+async function listServerSupabaseSnapshots(
+  prefixSearch: string,
+  limit = 8,
+): Promise<Array<{ name: string }>> {
+  const { url, key } = getServerSupabaseCredentials();
   try {
-    const { createClient } = await import("@supabase/supabase-js");
-    const client = createClient(creds.url, creds.key, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: files, error: listErr } = await client.storage
-      .from("contact-attachments")
-      .list("inquiries", {
-        limit: 5,
-        search: CMS_SNAPSHOT_PREFIX,
+    const res = await fetch(`${url}/storage/v1/object/list/${SUPABASE_BUCKET}`, {
+      method: "POST",
+      headers: buildSupabaseHeaders(key, { "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        prefix: "inquiries",
+        limit,
+        offset: 0,
+        search: prefixSearch,
         sortBy: { column: "name", order: "desc" },
-      });
-    if (listErr || !files || files.length === 0) return null;
+      }),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json().catch(() => null)) as Array<{ name?: string }> | null;
+    if (!Array.isArray(data)) return [];
+    return data.filter((item): item is { name: string } => typeof item?.name === "string");
+  } catch {
+    return [];
+  }
+}
 
-    const latest = files[0];
-    if (!latest?.name) return null;
-
-    const { data: blob, error: dlErr } = await client.storage
-      .from("contact-attachments")
-      .download(`inquiries/${latest.name}`);
-    if (dlErr || !blob) return null;
-
-    const text = await blob.text();
-    const parsed = JSON.parse(text) as Partial<CanvasCmsStoreData>;
-    return normalizeStore(parsed);
+async function downloadServerSupabaseText(storagePath: string): Promise<string | null> {
+  const { url, key } = getServerSupabaseCredentials();
+  try {
+    const res = await fetch(`${url}/storage/v1/object/${SUPABASE_BUCKET}/${storagePath}`, {
+      method: "GET",
+      headers: buildSupabaseHeaders(key),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    return await res.text();
   } catch {
     return null;
   }
 }
 
-async function writeSupabaseCanvasCmsStore(store: CanvasCmsStoreData): Promise<void> {
-  const creds = getServerSupabaseCredentials();
-  if (!creds) return;
-
+async function readSupabaseCanvasCmsStore(): Promise<CanvasCmsStoreData | null> {
   try {
-    const { createClient } = await import("@supabase/supabase-js");
-    const client = createClient(creds.url, creds.key, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const ts = Math.max(Date.now(), new Date(store.updatedAt || 0).getTime());
+    const v5Files = await listServerSupabaseSnapshots(CMS_SNAPSHOT_PREFIX, 8);
+    for (const file of v5Files) {
+      const text = await downloadServerSupabaseText(`inquiries/${file.name}`);
+      if (!text) continue;
+      try {
+        const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
+        if (new Date(parsed.updatedAt || 0).getTime() > 0) {
+          return parsed;
+        }
+      } catch {
+        // Try next snapshot
+      }
+    }
+
+    const v4Files = await listServerSupabaseSnapshots(LEGACY_SNAPSHOT_PREFIX, 10);
+    for (const file of v4Files) {
+      const text = await downloadServerSupabaseText(`inquiries/${file.name}`);
+      if (!text) continue;
+      try {
+        const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
+        const t = new Date(parsed.updatedAt || 0).getTime();
+        if (t > 0 && (parsed.addedItems.length > 0 || parsed.deletedIds.length > 0)) {
+          return parsed;
+        }
+      } catch {
+        // Try next snapshot
+      }
+    }
+  } catch {
+    // Ignore cloud read error
+  }
+  return null;
+}
+
+async function writeSupabaseCanvasCmsStore(store: CanvasCmsStoreData): Promise<void> {
+  const { url, key } = getServerSupabaseCredentials();
+  try {
+    const storeTime = new Date(store.updatedAt || 0).getTime();
+    if (storeTime <= 0) return;
+
+    const ts = Math.max(Date.now(), storeTime);
     const paddedTs = String(ts).padStart(15, "0");
     const rand = Math.random().toString(36).slice(2, 7);
     const snapName = `${CMS_SNAPSHOT_PREFIX}${paddedTs}-${rand}.json`;
     const payload = Buffer.from(JSON.stringify(store), "utf-8");
 
-    await client.storage.from("contact-attachments").upload(`inquiries/${snapName}`, payload, {
-      contentType: "application/json",
-      upsert: false,
+    await fetch(`${url}/storage/v1/object/${SUPABASE_BUCKET}/inquiries/${snapName}`, {
+      method: "POST",
+      headers: buildSupabaseHeaders(key, {
+        "Content-Type": "application/json",
+        "x-upsert": "false",
+      }),
+      body: new Uint8Array(payload),
     });
   } catch {
     // Ignore cloud snapshot error
@@ -858,15 +921,21 @@ export const Route = createFileRoute("/api/drive-media")({
               uniqueName,
             );
 
+            let cloudSignedUrl: string | null = null;
             if (savedCmsBuffer && savedCmsBuffer.byteLength <= 50 * 1024 * 1024) {
-              await uploadBufferToSupabaseStorage("cms", uniqueName, savedCmsBuffer, resolvedMime);
+              cloudSignedUrl = await uploadBufferToSupabaseStorage(
+                "cms",
+                uniqueName,
+                savedCmsBuffer,
+                resolvedMime,
+              );
             }
 
             return Response.json({
               files: [
                 {
                   filename: uniqueName,
-                  url: `/api/drive-media?local=${encodeURIComponent(uniqueName)}`,
+                  url: cloudSignedUrl || `/api/drive-media?local=${encodeURIComponent(uniqueName)}`,
                   mediaType: isVideo ? "video" : "image",
                   mimeType: resolvedMime,
                   title: cleanTitle,
@@ -983,13 +1052,19 @@ export const Route = createFileRoute("/api/drive-media")({
               uniqueName,
             );
 
+            let cloudSignedUrl: string | null = null;
             if (savedCmsBuffer && savedCmsBuffer.byteLength <= 50 * 1024 * 1024) {
-              await uploadBufferToSupabaseStorage("cms", uniqueName, savedCmsBuffer, resolvedMime);
+              cloudSignedUrl = await uploadBufferToSupabaseStorage(
+                "cms",
+                uniqueName,
+                savedCmsBuffer,
+                resolvedMime,
+              );
             }
 
             uploaded.push({
               filename: uniqueName,
-              url: `/api/drive-media?local=${encodeURIComponent(uniqueName)}`,
+              url: cloudSignedUrl || `/api/drive-media?local=${encodeURIComponent(uniqueName)}`,
               mediaType: isVideo ? "video" : "image",
               mimeType: resolvedMime,
               title: cleanTitle,
