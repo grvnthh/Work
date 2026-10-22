@@ -39,7 +39,6 @@ import {
   CANVAS_DIMENSIONS,
   computeAspectDimensions,
   expandCanvasProjects,
-  resolveNonOverlappingProjects,
   type PortfolioCanvasProject,
 } from "@/data/portfolioProjects";
 import {
@@ -107,8 +106,10 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
       draggable={false}
       onDragStart={(e) => e.preventDefault()}
       style={{
+        left: `${project.canvasX}px`,
+        top: `${project.canvasY}px`,
         width: `${project.width}px`,
-        transform: `translate3d(${project.canvasX}px, ${project.canvasY}px, 0)`,
+        height: `${project.height}px`,
       }}
       onClick={() => onCardClick(project)}
       onKeyDown={(e) => onCardKeyDown(e, project)}
@@ -119,16 +120,21 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
           ? `${project.title} — Click to play video with sound`
           : `${project.title} — Click to open zoomable photo preview`
       }
-      className={`canvas-card-surface group absolute left-0 top-0 select-none text-left focus-visible:outline-none ${
+      className={`canvas-card-surface group absolute select-none text-left focus-visible:outline-none ${
         isHighlighted ? "z-30" : "z-10"
       }`}
     >
       {/* Crisp Media Frame preserving 100% original aspect ratio */}
       <div
-        className={`relative w-full overflow-hidden rounded-2xl border bg-neutral-950 transition-colors duration-200 group-hover:border-white/30 group-hover:shadow-[0_28px_65px_-12px_rgba(0,0,0,0.95)] group-focus-visible:ring-2 group-focus-visible:ring-white/80 ${
+        style={{
+          width: `${project.width}px`,
+          height: `${project.height}px`,
+          aspectRatio: `${project.width} / ${project.height}`,
+        }}
+        className={`relative h-full w-full overflow-hidden rounded-2xl border bg-neutral-950 transition-colors duration-200 group-hover:border-white/35 group-focus-visible:ring-2 group-focus-visible:ring-white/80 ${
           isHighlighted
-            ? "border-emerald-400/90 ring-4 ring-emerald-400/35 shadow-[0_0_60px_rgba(52,211,153,0.45)]"
-            : "border-white/12 shadow-[0_22px_50px_-16px_rgba(0,0,0,0.85)]"
+            ? "border-emerald-400/90 ring-4 ring-emerald-400/35 shadow-2xl"
+            : "border-white/12 shadow-xl"
         }`}
       >
         {videoSrc ? (
@@ -149,7 +155,7 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
                 onRegisterAspect(project.id, v.videoWidth, v.videoHeight);
               }
             }}
-            className="pointer-events-none block h-auto w-full object-contain transition-transform duration-300 ease-out group-hover:scale-[1.02]"
+            className="pointer-events-none block h-full w-full rounded-2xl object-cover"
           />
         ) : (
           <MediaImage
@@ -158,6 +164,7 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
             width={project.width}
             height={project.height}
             loading="eager"
+            decoding="sync"
             maxRenderDimension={720}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}
@@ -167,7 +174,7 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
                 onRegisterAspect(project.id, img.naturalWidth, img.naturalHeight);
               }
             }}
-            className="pointer-events-none block h-auto w-full object-contain transition-transform duration-300 ease-out group-hover:scale-[1.02]"
+            className="pointer-events-none block h-full w-full rounded-2xl object-cover"
           />
         )}
 
@@ -431,7 +438,18 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
 
   const allProjects = useMemo(() => {
     const expanded = expandCanvasProjects(cmsItems);
-    return resolveNonOverlappingProjects(expanded, measuredDimensions, 64);
+    if (Object.keys(measuredDimensions).length === 0) {
+      return expanded;
+    }
+    return expanded.map((project) => {
+      const override = measuredDimensions[project.id];
+      if (!override) return project;
+      return {
+        ...project,
+        width: override.width,
+        height: override.height,
+      };
+    });
   }, [cmsItems, measuredDimensions]);
 
   const allProjectsRef = useRef<PortfolioCanvasProject[]>(allProjects);
@@ -455,20 +473,24 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       const { width, height } = computeAspectDimensions(naturalWidth, naturalHeight, 310);
 
       const currentCard = allProjectsRef.current.find((p) => p.id === projectId);
-      if (
-        currentCard &&
-        Math.abs(currentCard.width - width) <= 2 &&
-        Math.abs(currentCard.height - height) <= 2
-      ) {
-        return;
+      if (currentCard) {
+        const currentRatio = currentCard.width / Math.max(1, currentCard.height);
+        const naturalRatio = naturalWidth / naturalHeight;
+        // If stored card dimensions already match the natural aspect ratio closely, keep them locked
+        if (
+          Math.abs(currentRatio - naturalRatio) <= 0.06 ||
+          (Math.abs(currentCard.width - width) <= 4 && Math.abs(currentCard.height - height) <= 4)
+        ) {
+          return;
+        }
       }
 
       const existing =
         pendingDimensionsRef.current[projectId] ?? measuredDimensionsRef.current[projectId];
       if (
         existing &&
-        Math.abs(existing.width - width) <= 2 &&
-        Math.abs(existing.height - height) <= 2
+        Math.abs(existing.width - width) <= 4 &&
+        Math.abs(existing.height - height) <= 4
       ) {
         return;
       }
@@ -576,6 +598,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
         cam.mode = "idle";
         applyCameraTransform(nextX, nextY, nextScale);
       } else {
+        viewport.classList.add("is-panning");
         cam.tweenStartX = cam.x;
         cam.tweenStartY = cam.y;
         cam.tweenStartScale = cam.scale;
@@ -842,6 +865,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       if (!event.ctrlKey && (Math.abs(event.deltaX) > 0 || event.shiftKey)) {
         const dx = event.shiftKey ? -event.deltaY : -event.deltaX;
         const dy = event.shiftKey ? 0 : -event.deltaY;
+        el.classList.add("is-panning");
         cam.targetX = baseX + dx;
         cam.targetY = baseY + dy;
         cam.targetScale = baseScale;
@@ -863,6 +887,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       const nextScale = clampScale(baseScale * zoomFactor);
 
       const ratio = nextScale / baseScale;
+      el.classList.add("is-panning");
       cam.targetScale = nextScale;
       cam.targetX = mouseX - (mouseX - baseX) * ratio;
       cam.targetY = mouseY - (mouseY - baseY) * ratio;
@@ -1479,19 +1504,20 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
         </button>
       </div>
 
-      {/* Hardware-Accelerated 0x0 Origin Transform Stage (prevents 3900x2700 GPU backing texture allocation) */}
+      {/* Hardware-Accelerated Stage with explicit bounds so browser tile culling never clips or shutters cards when zoomed out */}
       <div
         ref={stageRef}
         style={{
           position: "absolute",
           left: 0,
           top: 0,
-          width: 0,
-          height: 0,
-          overflow: "visible",
+          width: `${canvasBounds.width}px`,
+          height: `${canvasBounds.height}px`,
           transformOrigin: "0 0",
           transform: `translate3d(${initialX}px, ${initialY}px, 0) scale(${initialScale})`,
           willChange: "transform",
+          backfaceVisibility: "hidden",
+          WebkitBackfaceVisibility: "hidden",
         }}
       >
         {/* Subtle Architectural Studio Crosshairs */}

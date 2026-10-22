@@ -144,10 +144,9 @@
   }
 }
 
-/* Inside the hardware-transformed infinite canvas, avoid per-card backdrop-filter re-sampling on every pan/zoom frame */
+/* Inside the hardware-transformed infinite canvas, avoid per-card 3D layer promotion and backdrop-filter re-sampling on pan/zoom frames */
 .canvas-card-surface {
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+  transform: none;
 }
 
 .canvas-card-surface .liquid-glass {
@@ -158,9 +157,11 @@
     rgba(10, 10, 12, 0.84);
 }
 
-/* While actively dragging/panning the canvas, skip per-card hover state changes, scaling and repaints */
-.is-panning .canvas-card-surface {
+/* While actively dragging, panning, or zooming the canvas, skip per-card hover state changes and repaints */
+.is-panning .canvas-card-surface,
+.is-panning .canvas-card-surface * {
   pointer-events: none !important;
+  transition: none !important;
 }
 
 @utility liquid-glass-modal {

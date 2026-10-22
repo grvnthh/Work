@@ -42,6 +42,8 @@ const AVAILABLE_THUMB_FILES = new Set([
 // and pause offscreen videos so the browser never decodes dozens of hidden streams at once.
 let sharedVideoObserver: IntersectionObserver | null = null;
 const observedVideos = new WeakSet<HTMLVideoElement>();
+const activePlayingVideos = new Set<HTMLVideoElement>();
+const MAX_CONCURRENT_CANVAS_VIDEOS = 6;
 
 function getSharedVideoObserver(): IntersectionObserver | null {
   if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") {
@@ -52,22 +54,36 @@ function getSharedVideoObserver(): IntersectionObserver | null {
       (entries) => {
         for (const entry of entries) {
           const video = entry.target as HTMLVideoElement;
+          if (!entry.isIntersecting) {
+            activePlayingVideos.delete(video);
+            if (!video.paused) {
+              video.pause();
+            }
+          }
+        }
+        for (const entry of entries) {
+          const video = entry.target as HTMLVideoElement;
           if (entry.isIntersecting) {
             video.defaultMuted = true;
             video.muted = true;
-            if (video.paused) {
+            if (
+              video.paused &&
+              (activePlayingVideos.has(video) ||
+                activePlayingVideos.size < MAX_CONCURRENT_CANVAS_VIDEOS)
+            ) {
+              activePlayingVideos.add(video);
               const p = video.play();
               if (p && typeof p.catch === "function") {
-                p.catch(() => {});
+                p.catch(() => {
+                  activePlayingVideos.delete(video);
+                });
               }
             }
-          } else if (!video.paused) {
-            video.pause();
           }
         }
       },
       {
-        rootMargin: "500px",
+        rootMargin: "200px",
         threshold: 0.01,
       },
     );
@@ -87,14 +103,11 @@ export function isVideoSource(src?: string | null): boolean {
 function useResolvedMediaState(src?: string | null): { url: string; isResolving: boolean } {
   const normalized = normalizeCmsMediaUrl(src);
   const key = extractMediaKeyFromUrl(normalized);
-  const isCmsLocal = Boolean(key && key.startsWith("cms-"));
 
   const [state, setState] = useState<{ url: string; isResolving: boolean }>(() => {
     if (!normalized) return { url: "", isResolving: false };
-    if (isCmsLocal) {
-      // Wait for IndexedDB lookup before firing any network request for cms-* keys
-      return { url: "", isResolving: true };
-    }
+    const immediate = getCachedObjectUrlForMedia(normalized);
+    if (immediate) return { url: immediate, isResolving: false };
     return { url: normalized, isResolving: false };
   });
 
@@ -106,35 +119,38 @@ function useResolvedMediaState(src?: string | null): { url: string; isResolving:
 
     const immediate = getCachedObjectUrlForMedia(normalized);
     if (immediate) {
-      setState({ url: immediate, isResolving: false });
+      setState((prev) =>
+        prev.url === immediate && !prev.isResolving ? prev : { url: immediate, isResolving: false },
+      );
       return;
     }
+
+    // Render normalized URL immediately so cards never flash a blank skeleton,
+    // and only resolve from IndexedDB if not already a blob URL.
+    setState((prev) =>
+      prev.url === normalized && !prev.isResolving ? prev : { url: normalized, isResolving: false },
+    );
 
     if (!key) {
-      setState({ url: normalized, isResolving: false });
       return;
-    }
-
-    if (isCmsLocal) {
-      setState((prev) => (prev.url ? prev : { url: "", isResolving: true }));
-    } else {
-      setState({ url: normalized, isResolving: false });
     }
 
     let active = true;
     void getMediaObjectUrlFromIdb(key).then((blobUrl) => {
-      if (!active) return;
-      if (blobUrl) {
-        setState({ url: blobUrl, isResolving: false });
-      } else {
-        setState({ url: normalized, isResolving: false });
-      }
+      if (!active || !blobUrl) return;
+      // Only switch to blobUrl if we haven't already settled on the same URL
+      setState((prev) => {
+        if (prev.url === blobUrl) return prev;
+        // If the element is already using a valid http/media URL, keep it stable unless it's a local-only key
+        if (prev.url && !prev.url.includes("local=")) return prev;
+        return { url: blobUrl, isResolving: false };
+      });
     });
 
     return () => {
       active = false;
     };
-  }, [normalized, key, isCmsLocal]);
+  }, [normalized, key]);
 
   return state;
 }
@@ -181,9 +197,12 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
   const setVideoNode = useCallback(
     (node: HTMLVideoElement | null) => {
       const prev = videoRef.current;
-      if (prev && prev !== node && observedVideos.has(prev)) {
-        getSharedVideoObserver()?.unobserve(prev);
-        observedVideos.delete(prev);
+      if (prev && prev !== node) {
+        activePlayingVideos.delete(prev);
+        if (observedVideos.has(prev)) {
+          getSharedVideoObserver()?.unobserve(prev);
+          observedVideos.delete(prev);
+        }
       }
 
       videoRef.current = node;
@@ -196,10 +215,13 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
           if (obs) {
             obs.observe(node);
             observedVideos.add(node);
-          } else {
+          } else if (activePlayingVideos.size < MAX_CONCURRENT_CANVAS_VIDEOS) {
+            activePlayingVideos.add(node);
             const playPromise = node.play();
             if (playPromise && typeof playPromise.catch === "function") {
-              playPromise.catch(() => {});
+              playPromise.catch(() => {
+                activePlayingVideos.delete(node);
+              });
             }
           }
         }
@@ -217,6 +239,7 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
     node.muted = true;
     node.playsInline = true;
     if (pausedPreview) {
+      activePlayingVideos.delete(node);
       node.pause();
       return;
     }
@@ -230,9 +253,12 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
   useEffect(() => {
     return () => {
       const node = videoRef.current;
-      if (node && observedVideos.has(node)) {
-        getSharedVideoObserver()?.unobserve(node);
-        observedVideos.delete(node);
+      if (node) {
+        activePlayingVideos.delete(node);
+        if (observedVideos.has(node)) {
+          getSharedVideoObserver()?.unobserve(node);
+          observedVideos.delete(node);
+        }
       }
     };
   }, []);
@@ -241,7 +267,7 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
     return (
       <div
         aria-hidden="true"
-        className={cn("min-h-[120px] min-w-[120px] animate-pulse bg-white/[0.04]", className)}
+        className={cn("min-h-[120px] min-w-[120px] bg-white/[0.04]", className)}
       />
     );
   }
@@ -285,7 +311,6 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       src={activeVideoSrc}
       poster={safePoster}
       aria-label={alt}
-      autoPlay={!pausedPreview}
       muted
       loop={loop}
       playsInline={playsInline}
@@ -301,10 +326,16 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
         const node = e.currentTarget;
         node.defaultMuted = true;
         node.muted = true;
-        if (!pausedPreview) {
+        if (
+          !pausedPreview &&
+          (activePlayingVideos.has(node) || activePlayingVideos.size < MAX_CONCURRENT_CANVAS_VIDEOS)
+        ) {
+          activePlayingVideos.add(node);
           const playPromise = node.play();
           if (playPromise && typeof playPromise.catch === "function") {
-            playPromise.catch(() => {});
+            playPromise.catch(() => {
+              activePlayingVideos.delete(node);
+            });
           }
         }
         props.onLoadedData?.(e);
@@ -395,7 +426,7 @@ export function InteractiveVideo({
     return (
       <div
         aria-hidden="true"
-        className={cn("min-h-[120px] min-w-[120px] animate-pulse bg-white/[0.04]", className)}
+        className={cn("min-h-[120px] min-w-[120px] bg-white/[0.04]", className)}
       />
     );
   }
@@ -493,15 +524,15 @@ export const MediaImage = memo(function MediaImage({
   const preferredSrc = maxRenderDimension
     ? getOptimizedMediaUrl(resolvedSrc, maxRenderDimension)
     : resolvedSrc;
-  const [currentSrc, setCurrentSrc] = useState(preferredSrc);
+  const [overrideSrc, setOverrideSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
+  const currentSrc = overrideSrc || preferredSrc;
+
   useEffect(() => {
-    setCurrentSrc(
-      maxRenderDimension ? getOptimizedMediaUrl(resolvedSrc, maxRenderDimension) : resolvedSrc,
-    );
+    setOverrideSrc(null);
     setFailed(false);
-  }, [resolvedSrc, maxRenderDimension]);
+  }, [preferredSrc]);
 
   if (!failed && isVideoSource(src)) {
     return (
@@ -519,7 +550,7 @@ export const MediaImage = memo(function MediaImage({
     return (
       <div
         aria-hidden="true"
-        className={cn("min-h-[80px] min-w-[80px] animate-pulse bg-white/[0.04]", className)}
+        className={cn("min-h-[80px] min-w-[80px] bg-white/[0.04]", className)}
       />
     );
   }
@@ -539,6 +570,9 @@ export const MediaImage = memo(function MediaImage({
     );
   }
 
+  const effectiveLoading = props.loading ?? "lazy";
+  const effectiveDecoding = props.decoding ?? (effectiveLoading === "eager" ? "sync" : "async");
+
   return (
     <img
       {...props}
@@ -549,8 +583,8 @@ export const MediaImage = memo(function MediaImage({
         e.preventDefault();
         props.onDragStart?.(e);
       }}
-      loading={props.loading ?? "lazy"}
-      decoding="async"
+      loading={effectiveLoading}
+      decoding={effectiveDecoding}
       className={className}
       onLoad={(e) => {
         setFailed(false);
@@ -558,14 +592,14 @@ export const MediaImage = memo(function MediaImage({
       }}
       onError={(event: SyntheticEvent<HTMLImageElement, Event>) => {
         if (currentSrc !== resolvedSrc && resolvedSrc) {
-          setCurrentSrc(resolvedSrc);
+          setOverrideSrc(resolvedSrc);
           return;
         }
         const key = extractMediaKeyFromUrl(src);
         if (key && !currentSrc.startsWith("blob:")) {
           void getMediaObjectUrlFromIdb(key).then((blobUrl) => {
             if (blobUrl && blobUrl !== currentSrc) {
-              setCurrentSrc(blobUrl);
+              setOverrideSrc(blobUrl);
               setFailed(false);
             } else {
               setFailed(true);
