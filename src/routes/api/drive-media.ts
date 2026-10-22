@@ -43,33 +43,44 @@ function safeDecodeURIComponent(val: string): string {
   }
 }
 
-async function uploadBufferToSupabaseStorage(
-  folder: "inquiries" | "cms",
-  uniqueName: string,
-  buffer: Buffer,
-  mimeType: string,
-): Promise<string | null> {
+const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v4-";
+
+function getServerSupabaseCredentials(): { url: string; key: string } | null {
   const url = process.env["SUPABASE_URL"] || process.env["VITE_SUPABASE_URL"];
   const key =
     process.env["SUPABASE_SERVICE_ROLE_KEY"] ||
     process.env["SUPABASE_PUBLISHABLE_KEY"] ||
     process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
   if (!url || !key) return null;
+  return { url, key };
+}
+
+async function uploadBufferToSupabaseStorage(
+  _folder: "inquiries" | "cms",
+  uniqueName: string,
+  buffer: Buffer,
+  mimeType: string,
+): Promise<string | null> {
+  const creds = getServerSupabaseCredentials();
+  if (!creds) return null;
 
   try {
     const { createClient } = await import("@supabase/supabase-js");
-    const client = createClient(url, key, {
+    const client = createClient(creds.url, creds.key, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const storagePath = `${folder}/${uniqueName}`;
+    // Always use inquiries/ prefix with upsert: false to satisfy public RLS INSERT/SELECT policies
+    const storagePath = `inquiries/${uniqueName}`;
     const { error: uploadError } = await client.storage
       .from("contact-attachments")
       .upload(storagePath, buffer, {
         contentType: mimeType || "application/octet-stream",
-        upsert: true,
+        upsert: false,
       });
 
-    if (uploadError) return null;
+    if (uploadError && !uploadError.message?.toLowerCase().includes("already exists")) {
+      return null;
+    }
 
     const { data: signed30d } = await client.storage
       .from("contact-attachments")
@@ -90,45 +101,117 @@ async function getSupabaseStorageSignedUrl(
   folder: "inquiries" | "cms",
   safeName: string,
 ): Promise<string | null> {
-  const url = process.env["SUPABASE_URL"] || process.env["VITE_SUPABASE_URL"];
-  const key =
-    process.env["SUPABASE_SERVICE_ROLE_KEY"] ||
-    process.env["SUPABASE_PUBLISHABLE_KEY"] ||
-    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
-  if (!url || !key) return null;
+  const creds = getServerSupabaseCredentials();
+  if (!creds) return null;
 
   try {
     const { createClient } = await import("@supabase/supabase-js");
-    const client = createClient(url, key, {
+    const client = createClient(creds.url, creds.key, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const storagePath = `${folder}/${safeName}`;
-    const { data } = await client.storage
+
+    const primaryPath = `inquiries/${safeName}`;
+    const { data: primaryData } = await client.storage
       .from("contact-attachments")
-      .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
-    if (data?.signedUrl) return data.signedUrl;
+      .createSignedUrl(primaryPath, 60 * 60 * 24 * 7);
+    if (primaryData?.signedUrl) return primaryData.signedUrl;
+
+    if (folder !== "inquiries") {
+      const fallbackPath = `${folder}/${safeName}`;
+      const { data: fallbackData } = await client.storage
+        .from("contact-attachments")
+        .createSignedUrl(fallbackPath, 60 * 60 * 24 * 7);
+      if (fallbackData?.signedUrl) return fallbackData.signedUrl;
+    }
   } catch {
     // Ignore error
   }
   return null;
 }
 
+async function readSupabaseCanvasCmsStore(): Promise<CanvasCmsStoreData | null> {
+  const creds = getServerSupabaseCredentials();
+  if (!creds) return null;
+
+  try {
+    const { createClient } = await import("@supabase/supabase-js");
+    const client = createClient(creds.url, creds.key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: files, error: listErr } = await client.storage
+      .from("contact-attachments")
+      .list("inquiries", {
+        limit: 5,
+        search: CMS_SNAPSHOT_PREFIX,
+        sortBy: { column: "name", order: "desc" },
+      });
+    if (listErr || !files || files.length === 0) return null;
+
+    const latest = files[0];
+    if (!latest?.name) return null;
+
+    const { data: blob, error: dlErr } = await client.storage
+      .from("contact-attachments")
+      .download(`inquiries/${latest.name}`);
+    if (dlErr || !blob) return null;
+
+    const text = await blob.text();
+    const parsed = JSON.parse(text) as Partial<CanvasCmsStoreData>;
+    return normalizeStore(parsed);
+  } catch {
+    return null;
+  }
+}
+
+async function writeSupabaseCanvasCmsStore(store: CanvasCmsStoreData): Promise<void> {
+  const creds = getServerSupabaseCredentials();
+  if (!creds) return;
+
+  try {
+    const { createClient } = await import("@supabase/supabase-js");
+    const client = createClient(creds.url, creds.key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const ts = Math.max(Date.now(), new Date(store.updatedAt || 0).getTime());
+    const paddedTs = String(ts).padStart(15, "0");
+    const rand = Math.random().toString(36).slice(2, 7);
+    const snapName = `${CMS_SNAPSHOT_PREFIX}${paddedTs}-${rand}.json`;
+    const payload = Buffer.from(JSON.stringify(store), "utf-8");
+
+    await client.storage.from("contact-attachments").upload(`inquiries/${snapName}`, payload, {
+      contentType: "application/json",
+      upsert: false,
+    });
+  } catch {
+    // Ignore cloud snapshot error
+  }
+}
+
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const CANVAS_CMS_FILE = path.join(DATA_DIR, "canvas-cms.json");
 
 export function readServerCanvasCmsStore(): CanvasCmsStoreData {
+  let diskStore: CanvasCmsStoreData | null = null;
   try {
     if (fs.existsSync(CANVAS_CMS_FILE)) {
       const raw = fs.readFileSync(CANVAS_CMS_FILE, "utf-8");
       const parsed = JSON.parse(raw) as Partial<CanvasCmsStoreData>;
-      const normalized = normalizeStore(parsed);
-      globalState.__GRVNTH_CMS_STORE__ = normalized;
-      return normalized;
+      diskStore = normalizeStore(parsed);
     }
   } catch {
     // Fall back to in-memory store
   }
 
+  const memStore = globalState.__GRVNTH_CMS_STORE__ ?? null;
+  if (diskStore && memStore) {
+    const merged = mergeCmsStores(memStore, diskStore);
+    globalState.__GRVNTH_CMS_STORE__ = merged;
+    return merged;
+  }
+  if (diskStore) {
+    globalState.__GRVNTH_CMS_STORE__ = diskStore;
+    return diskStore;
+  }
   if (!globalState.__GRVNTH_CMS_STORE__) {
     globalState.__GRVNTH_CMS_STORE__ = normalizeStore(null);
   }
@@ -459,7 +542,12 @@ export const Route = createFileRoute("/api/drive-media")({
         const url = new URL(request.url);
 
         if (url.searchParams.get("cmsState") === "1") {
-          const store = readServerCanvasCmsStore();
+          let store = readServerCanvasCmsStore();
+          const cloudStore = await readSupabaseCanvasCmsStore();
+          if (cloudStore) {
+            store = mergeCmsStores(store, cloudStore);
+            writeServerCanvasCmsStore(store);
+          }
           const resolved = buildResolvedCanvasItemsFromStore(store);
           return Response.json(resolved);
         }
@@ -572,11 +660,19 @@ export const Route = createFileRoute("/api/drive-media")({
             };
             if (body?.store) {
               const incoming = normalizeStore(body.store);
+              let baseServerStore = readServerCanvasCmsStore();
+              if (body.action !== "forceSetStore") {
+                const cloudStore = await readSupabaseCanvasCmsStore();
+                if (cloudStore) {
+                  baseServerStore = mergeCmsStores(baseServerStore, cloudStore);
+                }
+              }
               const nextStore =
                 body.action === "forceSetStore"
                   ? incoming
-                  : mergeCmsStores(incoming, readServerCanvasCmsStore());
+                  : mergeCmsStores(incoming, baseServerStore);
               const saved = writeServerCanvasCmsStore(nextStore);
+              await writeSupabaseCanvasCmsStore(saved);
               return Response.json(buildResolvedCanvasItemsFromStore(saved));
             }
             const current = readServerCanvasCmsStore();
@@ -763,7 +859,7 @@ export const Route = createFileRoute("/api/drive-media")({
             );
 
             if (savedCmsBuffer && savedCmsBuffer.byteLength <= 50 * 1024 * 1024) {
-              void uploadBufferToSupabaseStorage("cms", uniqueName, savedCmsBuffer, resolvedMime);
+              await uploadBufferToSupabaseStorage("cms", uniqueName, savedCmsBuffer, resolvedMime);
             }
 
             return Response.json({
@@ -888,7 +984,7 @@ export const Route = createFileRoute("/api/drive-media")({
             );
 
             if (savedCmsBuffer && savedCmsBuffer.byteLength <= 50 * 1024 * 1024) {
-              void uploadBufferToSupabaseStorage("cms", uniqueName, savedCmsBuffer, resolvedMime);
+              await uploadBufferToSupabaseStorage("cms", uniqueName, savedCmsBuffer, resolvedMime);
             }
 
             uploaded.push({

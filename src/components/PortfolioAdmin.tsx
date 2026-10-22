@@ -30,6 +30,7 @@ import {
   broadcastCanvasCmsUpdate,
   buildResolvedCanvasItemsFromStore,
   canUndoCmsAction,
+  flushPendingCmsPush,
   loadSynchronizedCmsState,
   mutateAddCanvasItems,
   mutateClearAllCanvasItems,
@@ -257,6 +258,7 @@ export function PortfolioAdmin({
       if (res.lastFocusedId) {
         markRecentlyMoved(res.lastFocusedId);
       }
+      await flushPendingCmsPush();
       toast.success(
         `Uploaded ${uploaded.length} ${uploaded.length === 1 ? "file" : "files"} directly to the canvas!`,
       );

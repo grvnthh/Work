@@ -591,16 +591,63 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
     [applyCameraTransform, prefersReducedMotion, startCameraLoop],
   );
 
+  const computeSmartCanvasFocusPoint = useCallback((): { x: number; y: number } => {
+    const projects = allProjectsRef.current;
+    if (!projects || projects.length === 0) {
+      return {
+        x: CANVAS_DIMENSIONS.initialFocusX,
+        y: CANVAS_DIMENSIONS.initialFocusY,
+      };
+    }
+
+    const centers = projects.map((p) => {
+      const dims = measuredDimensionsRef.current[p.id] ?? {
+        width: p.width,
+        height: p.height,
+      };
+      return {
+        id: p.id,
+        cx: p.canvasX + dims.width / 2,
+        cy: p.canvasY + dims.height / 2,
+      };
+    });
+
+    if (centers.length === 1) {
+      return { x: Math.round(centers[0].cx), y: Math.round(centers[0].cy) };
+    }
+
+    const avgX = centers.reduce((acc, c) => acc + c.cx, 0) / centers.length;
+    const avgY = centers.reduce((acc, c) => acc + c.cy, 0) / centers.length;
+
+    // Find the card closest to the centroid of all cards so the camera is guaranteed
+    // to frame actual media cards near the center of the viewport rather than empty space.
+    let best = centers[0];
+    let bestDist = Math.hypot(best.cx - avgX, best.cy - avgY);
+    for (let i = 1; i < centers.length; i += 1) {
+      const d = Math.hypot(centers[i].cx - avgX, centers[i].cy - avgY);
+      if (d < bestDist) {
+        best = centers[i];
+        bestDist = d;
+      }
+    }
+
+    // Blend slightly toward the cluster average if the nearest card is close to the centroid
+    if (bestDist <= 420) {
+      return {
+        x: Math.round(best.cx * 0.6 + avgX * 0.4),
+        y: Math.round(best.cy * 0.6 + avgY * 0.4),
+      };
+    }
+
+    return { x: Math.round(best.cx), y: Math.round(best.cy) };
+  }, []);
+
   const handleResetView = useCallback(
     (durationMs = 520) => {
-      focusCanvasPoint(
-        CANVAS_DIMENSIONS.initialFocusX,
-        CANVAS_DIMENSIONS.initialFocusY,
-        undefined,
-        durationMs,
-      );
+      const pt = computeSmartCanvasFocusPoint();
+      focusCanvasPoint(pt.x, pt.y, undefined, durationMs);
     },
-    [focusCanvasPoint],
+    [computeSmartCanvasFocusPoint, focusCanvasPoint],
   );
 
   const pulseHighlight = useCallback((id: string) => {
@@ -631,10 +678,30 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
     [embeddedPreview, focusCanvasPoint, pulseHighlight],
   );
 
+  const handleResetViewRef = useRef(handleResetView);
+  handleResetViewRef.current = handleResetView;
+  const focusProjectOnCanvasRef = useRef(focusProjectOnCanvas);
+  focusProjectOnCanvasRef.current = focusProjectOnCanvas;
+  const hasCenteredOnLoadedItemsRef = useRef(false);
+
+  const centerOnBestTarget = useCallback((durationMs = 0) => {
+    const store = readLocalCmsStore();
+    const updatedAgeMs = Date.now() - new Date(store.updatedAt || 0).getTime();
+    if (store.lastFocusedId && updatedAgeMs < 120_000) {
+      const target = allProjectsRef.current.find((p) => p.id === store.lastFocusedId);
+      if (target) {
+        focusProjectOnCanvasRef.current(target, durationMs);
+        return;
+      }
+    }
+    handleResetViewRef.current(durationMs);
+  }, []);
+
   // Load persisted Canvas CMS items and listen for live updates from the Studio CMS
   useEffect(() => {
     let active = true;
-    updateCmsItemsIfChanged(buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items);
+    const initialLocalItems = buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items;
+    updateCmsItemsIfChanged(initialLocalItems);
 
     const syncFromServer = () => {
       void loadSynchronizedCmsState()
@@ -712,29 +779,24 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
     };
   }, [focusProjectOnCanvas, updateCmsItemsIfChanged]);
 
-  const handleResetViewRef = useRef(handleResetView);
-  handleResetViewRef.current = handleResetView;
-  const focusProjectOnCanvasRef = useRef(focusProjectOnCanvas);
-  focusProjectOnCanvasRef.current = focusProjectOnCanvas;
+  // Whenever items first populate on the canvas (from localStorage or cloud sync),
+  // immediately center the camera on them so visitors never see an empty canvas.
+  useEffect(() => {
+    if (allProjects.length > 0 && !hasCenteredOnLoadedItemsRef.current) {
+      hasCenteredOnLoadedItemsRef.current = true;
+      centerOnBestTarget(0);
+    } else if (allProjects.length === 0) {
+      hasCenteredOnLoadedItemsRef.current = false;
+    }
+  }, [allProjects.length, centerOnBestTarget]);
 
   // Initial camera positioning: center immediately on mount and track layout stabilization
   useEffect(() => {
-    handleResetViewRef.current(0);
+    centerOnBestTarget(0);
 
-    const checkAndCenter = () => {
-      const store = readLocalCmsStore();
-      const updatedAgeMs = Date.now() - new Date(store.updatedAt || 0).getTime();
-      if (store.lastFocusedId && updatedAgeMs < 60_000) {
-        const target = allProjectsRef.current.find((p) => p.id === store.lastFocusedId);
-        if (target) {
-          focusProjectOnCanvasRef.current(target, 450);
-          return;
-        }
-      }
-      handleResetViewRef.current(0);
-    };
-
-    const timer = window.setTimeout(checkAndCenter, 60);
+    const timer = window.setTimeout(() => {
+      centerOnBestTarget(0);
+    }, 60);
 
     // Also observe viewport resizing (e.g. after initial loader fades)
     const el = viewportRef.current;
@@ -746,7 +808,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
         if (!entry || entry.contentRect.width === 0) return;
         if (!settled) {
           settled = true;
-          checkAndCenter();
+          centerOnBestTarget(0);
         }
       });
       ro.observe(el);
@@ -756,7 +818,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       window.clearTimeout(timer);
       ro?.disconnect();
     };
-  }, []);
+  }, [centerOnBestTarget]);
 
   // Smooth cursor-centered wheel & trackpad pinch zooming
   useEffect(() => {

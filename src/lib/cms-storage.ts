@@ -11,6 +11,7 @@ import {
   type PortfolioCanvasProject,
   type PortfolioCanvasProjectInput,
 } from "@/data/portfolioProjects";
+import { supabase } from "@/integrations/supabase/client";
 
 export interface CanvasCmsStoreData {
   addedItems: PortfolioCanvasProject[];
@@ -40,12 +41,14 @@ const LOCAL_STORAGE_KEY = "grvnth_canvas_cms_store_v3";
 const BROADCAST_CHANNEL_NAME = "grvnth_canvas_cms_channel";
 const IDB_NAME = "grvnth_cms_media_idb";
 const IDB_STORE = "media_files";
+const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v4-";
 
 let memoryStore: CanvasCmsStoreData | null = null;
 const undoHistoryStack: CanvasCmsStoreData[] = [];
 let mutationVersion = 0;
 let pendingPushPromise: Promise<void> | null = null;
 const objectUrlCache = new Map<string, string>();
+const cloudUploadedKeys = new Set<string>();
 let broadcastChannel: BroadcastChannel | null = null;
 
 function pushUndoSnapshot(store: CanvasCmsStoreData): void {
@@ -253,34 +256,69 @@ function findDistinctRandomCanvasPosition(
   const minDistanceFromPrevious = previousPos ? 360 : 0;
 
   if (preferCenterZone) {
-    const centerMinX = Math.max(140, CANVAS_DIMENSIONS.initialFocusX - 1050);
-    const centerMaxX = Math.min(
-      CANVAS_DIMENSIONS.width - width - 140,
-      CANVAS_DIMENSIONS.initialFocusX + 850,
-    );
-    const centerMinY = Math.max(140, CANVAS_DIMENSIONS.initialFocusY - 720);
-    const centerMaxY = Math.min(
-      CANVAS_DIMENSIONS.height - height - 140,
-      CANVAS_DIMENSIONS.initialFocusY + 620,
-    );
+    // When the canvas is empty or has only a few items, keep items tightly clustered around
+    // initialFocusX/Y so the viewport is never blank when opening the site.
+    if (existingRects.length === 0 && !previousPos) {
+      const firstX = Math.round(
+        CANVAS_DIMENSIONS.initialFocusX - width / 2 + (Math.random() - 0.5) * 140,
+      );
+      const firstY = Math.round(
+        CANVAS_DIMENSIONS.initialFocusY - height / 2 + (Math.random() - 0.5) * 90,
+      );
+      return {
+        canvasX: Math.max(140, Math.min(CANVAS_DIMENSIONS.width - width - 140, firstX)),
+        canvasY: Math.max(140, Math.min(CANVAS_DIMENSIONS.height - height - 140, firstY)),
+      };
+    }
 
-    for (let attempt = 0; attempt < 350; attempt += 1) {
-      const candidateX = Math.round(centerMinX + Math.random() * (centerMaxX - centerMinX));
-      const candidateY = Math.round(centerMinY + Math.random() * (centerMaxY - centerMinY));
-      if (previousPos) {
-        const dist = Math.hypot(candidateX - previousPos.canvasX, candidateY - previousPos.canvasY);
-        if (dist < minDistanceFromPrevious) continue;
-      }
-      if (!doesRectOverlapAny(candidateX, candidateY, width, height, existingRects, minGap)) {
-        return { canvasX: candidateX, canvasY: candidateY };
+    const tiers = [
+      { rx: 420, ry: 270, attempts: 140 },
+      { rx: 680, ry: 440, attempts: 160 },
+      { rx: 980, ry: 650, attempts: 180 },
+    ];
+
+    for (const tier of tiers) {
+      const centerMinX = Math.max(140, CANVAS_DIMENSIONS.initialFocusX - width / 2 - tier.rx);
+      const centerMaxX = Math.min(
+        CANVAS_DIMENSIONS.width - width - 140,
+        CANVAS_DIMENSIONS.initialFocusX - width / 2 + tier.rx,
+      );
+      const centerMinY = Math.max(140, CANVAS_DIMENSIONS.initialFocusY - height / 2 - tier.ry);
+      const centerMaxY = Math.min(
+        CANVAS_DIMENSIONS.height - height - 140,
+        CANVAS_DIMENSIONS.initialFocusY - height / 2 + tier.ry,
+      );
+
+      for (let attempt = 0; attempt < tier.attempts; attempt += 1) {
+        const candidateX = Math.round(centerMinX + Math.random() * (centerMaxX - centerMinX));
+        const candidateY = Math.round(centerMinY + Math.random() * (centerMaxY - centerMinY));
+        if (previousPos) {
+          const dist = Math.hypot(
+            candidateX - previousPos.canvasX,
+            candidateY - previousPos.canvasY,
+          );
+          if (dist < minDistanceFromPrevious) continue;
+        }
+        if (!doesRectOverlapAny(candidateX, candidateY, width, height, existingRects, minGap)) {
+          return { canvasX: candidateX, canvasY: candidateY };
+        }
       }
     }
 
-    // If the central zone is densely packed, pick a distinct coordinate inside the central studio
-    // neighborhood so the caller can resolve/nudge any adjacent cards without exiling the item.
+    // Fallback inside central neighborhood so caller can nudge adjacent cards without exiling the item
+    const fallbackMinX = Math.max(140, CANVAS_DIMENSIONS.initialFocusX - width / 2 - 520);
+    const fallbackMaxX = Math.min(
+      CANVAS_DIMENSIONS.width - width - 140,
+      CANVAS_DIMENSIONS.initialFocusX - width / 2 + 520,
+    );
+    const fallbackMinY = Math.max(140, CANVAS_DIMENSIONS.initialFocusY - height / 2 - 360);
+    const fallbackMaxY = Math.min(
+      CANVAS_DIMENSIONS.height - height - 140,
+      CANVAS_DIMENSIONS.initialFocusY - height / 2 + 360,
+    );
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      const candidateX = Math.round(centerMinX + Math.random() * (centerMaxX - centerMinX));
-      const candidateY = Math.round(centerMinY + Math.random() * (centerMaxY - centerMinY));
+      const candidateX = Math.round(fallbackMinX + Math.random() * (fallbackMaxX - fallbackMinX));
+      const candidateY = Math.round(fallbackMinY + Math.random() * (fallbackMaxY - fallbackMinY));
       if (previousPos) {
         const dist = Math.hypot(candidateX - previousPos.canvasX, candidateY - previousPos.canvasY);
         if (dist < minDistanceFromPrevious) continue;
@@ -507,18 +545,68 @@ export async function getMediaBlobFromIdb(
   });
 }
 
+async function uploadMediaBlobToSupabaseCloud(key: string, blob: Blob): Promise<string | null> {
+  if (!key || blob.size === 0 || blob.size > 50 * 1024 * 1024) return null;
+  try {
+    const storagePath = `inquiries/${key}`;
+    if (!cloudUploadedKeys.has(key)) {
+      const { error } = await supabase.storage
+        .from("contact-attachments")
+        .upload(storagePath, blob, {
+          contentType: blob.type || "application/octet-stream",
+          upsert: false,
+        });
+      if (!error || error.message?.toLowerCase().includes("already exists")) {
+        cloudUploadedKeys.add(key);
+      }
+    }
+    const { data: signed } = await supabase.storage
+      .from("contact-attachments")
+      .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+    return signed?.signedUrl ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function getCloudSignedUrlForMediaKey(key: string): Promise<string | null> {
+  if (!key) return null;
+  try {
+    const { data } = await supabase.storage
+      .from("contact-attachments")
+      .createSignedUrl(`inquiries/${key}`, 60 * 60 * 24 * 7);
+    if (data?.signedUrl) {
+      cloudUploadedKeys.add(key);
+      return data.signedUrl;
+    }
+  } catch {
+    // Ignore cloud lookup error
+  }
+  return null;
+}
+
 export async function getMediaObjectUrlFromIdb(key: string): Promise<string | null> {
   const cached = objectUrlCache.get(key);
   if (cached) return cached;
 
   const found = await getMediaBlobFromIdb(key);
-  if (!found) return null;
+  if (found) {
+    const existingMatchedUrl = objectUrlCache.get(found.matchedKey);
+    const url = existingMatchedUrl ?? URL.createObjectURL(found.blob);
+    objectUrlCache.set(key, url);
+    objectUrlCache.set(found.matchedKey, url);
+    void uploadMediaBlobToSupabaseCloud(key, found.blob);
+    return url;
+  }
 
-  const existingMatchedUrl = objectUrlCache.get(found.matchedKey);
-  const url = existingMatchedUrl ?? URL.createObjectURL(found.blob);
-  objectUrlCache.set(key, url);
-  objectUrlCache.set(found.matchedKey, url);
-  return url;
+  // Fallback for visitors or new browser sessions: resolve signed URL directly from Supabase Storage
+  const cloudSignedUrl = await getCloudSignedUrlForMediaKey(key);
+  if (cloudSignedUrl) {
+    objectUrlCache.set(key, cloudSignedUrl);
+    return cloudSignedUrl;
+  }
+
+  return null;
 }
 
 export function extractMediaKeyFromUrl(url?: string | null): string | null {
@@ -527,6 +615,10 @@ export function extractMediaKeyFromUrl(url?: string | null): string | null {
     if (url.includes("local=")) {
       const parsed = new URL(url, "http://localhost");
       return parsed.searchParams.get("local");
+    }
+    if (url.includes("inquiry=")) {
+      const parsed = new URL(url, "http://localhost");
+      return parsed.searchParams.get("inquiry");
     }
     if (url.startsWith("/media/")) {
       return url.slice("/media/".length).split("?")[0];
@@ -578,7 +670,9 @@ async function isMediaUrlAvailable(url?: string | null): Promise<boolean> {
       objectUrlCache.set(idbFound.matchedKey, objUrl);
     }
 
-    // Ensure server also has a copy of this blob in the background
+    // Ensure Supabase Cloud and server both have a copy of this blob
+    void uploadMediaBlobToSupabaseCloud(key, idbFound.blob);
+
     void fetch(`/api/drive-media?local=${encodeURIComponent(key)}&check=1`)
       .then((r) => (r.ok ? (r.json() as Promise<{ exists?: boolean }>) : null))
       .then((status) => {
@@ -601,7 +695,14 @@ async function isMediaUrlAvailable(url?: string | null): Promise<boolean> {
     return true;
   }
 
-  // 2. Not in IndexedDB: check if the server has the file
+  // 2. Check Supabase Cloud signed URL directly
+  const cloudSigned = await getCloudSignedUrlForMediaKey(key);
+  if (cloudSigned) {
+    objectUrlCache.set(key, cloudSigned);
+    return true;
+  }
+
+  // 3. Not in IndexedDB: check if the server has the file
   try {
     const checkRes = await fetch(`/api/drive-media?local=${encodeURIComponent(key)}&check=1`, {
       cache: "no-store",
@@ -615,6 +716,7 @@ async function isMediaUrlAvailable(url?: string | null): Promise<boolean> {
           .then((blob) => {
             if (blob && blob.size > 0) {
               void saveMediaBlobToIdb(key, blob);
+              void uploadMediaBlobToSupabaseCloud(key, blob);
             }
           })
           .catch(() => {});
@@ -818,7 +920,9 @@ export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMedi
     // 1. Immediately cache the binary file in IndexedDB + objectUrlCache for instant zero-latency rendering
     await saveMediaBlobToIdb(localKey, file);
 
-    // 2. Also stream to /api/drive-media so server disk + server memory store it
+    // 2. Upload directly to Supabase Storage (inquiries/ prefix satisfies RLS) in parallel with /api/drive-media
+    const cloudUploadPromise = uploadMediaBlobToSupabaseCloud(localKey, file);
+
     let finalUrl = `/api/drive-media?local=${encodeURIComponent(localKey)}`;
     let finalMediaType: "image" | "video" = isVideo ? "video" : "image";
     let finalTitle = cleanTitle;
@@ -859,6 +963,7 @@ export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMedi
         if (uploaded) {
           if (uploaded.filename && uploaded.filename !== localKey) {
             await saveMediaBlobToIdb(uploaded.filename, file);
+            await uploadMediaBlobToSupabaseCloud(uploaded.filename, file);
           }
           finalUrl = uploaded.url || finalUrl;
           finalMediaType = uploaded.mediaType || finalMediaType;
@@ -866,8 +971,10 @@ export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMedi
         }
       }
     } catch {
-      // IndexedDB fallback already holds localKey
+      // IndexedDB + Supabase Cloud already hold localKey
     }
+
+    await cloudUploadPromise.catch(() => null);
 
     results.push({
       url: finalUrl,
@@ -947,35 +1054,90 @@ export function mergeCmsStores(
   };
 }
 
+async function readCloudCmsStoreSnapshot(): Promise<CanvasCmsStoreData | null> {
+  try {
+    const { data: files, error: listErr } = await supabase.storage
+      .from("contact-attachments")
+      .list("inquiries", {
+        limit: 5,
+        search: CMS_SNAPSHOT_PREFIX,
+        sortBy: { column: "name", order: "desc" },
+      });
+    if (listErr || !files || files.length === 0) return null;
+
+    const latest = files[0];
+    if (!latest?.name) return null;
+
+    const { data: blob, error: dlErr } = await supabase.storage
+      .from("contact-attachments")
+      .download(`inquiries/${latest.name}`);
+    if (dlErr || !blob) return null;
+
+    const text = await blob.text();
+    const parsed = JSON.parse(text) as Partial<CanvasCmsStoreData>;
+    return normalizeStore(parsed);
+  } catch {
+    return null;
+  }
+}
+
+async function writeCloudCmsStoreSnapshot(store: CanvasCmsStoreData): Promise<void> {
+  try {
+    const ts = Math.max(Date.now(), new Date(store.updatedAt || 0).getTime());
+    const paddedTs = String(ts).padStart(15, "0");
+    const rand = Math.random().toString(36).slice(2, 7);
+    const snapName = `${CMS_SNAPSHOT_PREFIX}${paddedTs}-${rand}.json`;
+    const blob = new Blob([JSON.stringify(store)], { type: "application/json" });
+
+    await supabase.storage.from("contact-attachments").upload(`inquiries/${snapName}`, blob, {
+      contentType: "application/json",
+      upsert: false,
+    });
+  } catch {
+    // Ignore cloud snapshot error
+  }
+}
+
 export function pushStoreToServer(store: CanvasCmsStoreData, forceReplace = false): Promise<void> {
   if (typeof window === "undefined") return Promise.resolve();
   const snapshot = cloneStore(store);
 
   const runPush = async () => {
-    try {
-      const res = await fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: forceReplace ? "forceSetStore" : "setStore",
-          store: snapshot,
-        }),
-      });
-      if (res.ok && typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("canvas-cms-server-synced", {
-            detail: buildResolvedCanvasItemsFromStore(snapshot),
-          }),
-        );
-      }
-    } catch {
-      // Local store already holds the state
-    }
+    await Promise.allSettled([
+      writeCloudCmsStoreSnapshot(snapshot),
+      (async () => {
+        try {
+          const res = await fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: forceReplace ? "forceSetStore" : "setStore",
+              store: snapshot,
+            }),
+          });
+          if (res.ok && typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("canvas-cms-server-synced", {
+                detail: buildResolvedCanvasItemsFromStore(snapshot),
+              }),
+            );
+          }
+        } catch {
+          // Cloud + local store already hold the state
+        }
+      })(),
+    ]);
   };
 
   pendingPushPromise = (pendingPushPromise ?? Promise.resolve()).then(runPush, runPush);
   return pendingPushPromise;
+}
+
+export async function flushPendingCmsPush(): Promise<void> {
+  if (pendingPushPromise) {
+    await pendingPushPromise.catch(() => {});
+  }
 }
 
 export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState> {
@@ -986,41 +1148,53 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
   const versionBeforeFetch = mutationVersion;
   let chosenStore = readLocalCmsStore();
 
-  try {
-    const res = await fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
+  const [serverResult, cloudResult] = await Promise.allSettled([
+    fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
       method: "GET",
       cache: "no-store",
       headers: {
         Accept: "application/json",
         "Cache-Control": "no-cache",
       },
-    });
-
-    if (mutationVersion !== versionBeforeFetch) {
-      return buildResolvedCanvasItemsFromStore(readLocalCmsStore());
-    }
-
-    if (res.ok) {
+    }).then(async (res) => {
+      if (!res.ok) return null;
       const data = (await res.json()) as { store?: Partial<CanvasCmsStoreData> };
-      if (mutationVersion !== versionBeforeFetch) {
-        return buildResolvedCanvasItemsFromStore(readLocalCmsStore());
-      }
+      return data?.store ? normalizeStore(data.store) : null;
+    }),
+    readCloudCmsStoreSnapshot(),
+  ]);
 
-      if (data?.store) {
-        const serverStore = normalizeStore(data.store);
-        const latestLocalStore = readLocalCmsStore();
-        chosenStore = mergeCmsStores(latestLocalStore, serverStore);
-      }
-    }
-  } catch {
-    // Use localStore on network error
+  if (mutationVersion !== versionBeforeFetch) {
+    return buildResolvedCanvasItemsFromStore(readLocalCmsStore());
+  }
+
+  const latestLocalStore = readLocalCmsStore();
+  chosenStore = latestLocalStore;
+
+  const serverStore = serverResult.status === "fulfilled" ? serverResult.value : null;
+  const cloudStore = cloudResult.status === "fulfilled" ? cloudResult.value : null;
+
+  if (serverStore) {
+    chosenStore = mergeCmsStores(chosenStore, serverStore);
+  }
+  if (cloudStore) {
+    chosenStore = mergeCmsStores(chosenStore, cloudStore);
   }
 
   await healAndValidateStoreMedia(chosenStore);
   persistStoreLocally(chosenStore);
-  if (chosenStore.addedItems.length > 0 || chosenStore.deletedIds.length > 0) {
+
+  // If our merged store has items that weren't in cloudStore or serverStore yet, push to keep all layers synced
+  const cloudCount = cloudStore?.addedItems.length ?? 0;
+  const serverCount = serverStore?.addedItems.length ?? 0;
+  if (
+    chosenStore.addedItems.length > cloudCount ||
+    chosenStore.addedItems.length > serverCount ||
+    chosenStore.deletedIds.length > (cloudStore?.deletedIds.length ?? 0)
+  ) {
     void pushStoreToServer(chosenStore);
   }
+
   return buildResolvedCanvasItemsFromStore(chosenStore);
 }
 
