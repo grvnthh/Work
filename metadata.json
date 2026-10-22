@@ -1,0 +1,6 @@
+{
+  "name": "GRVNTH Studio",
+  "description": "Portfolio website for Granth Agrawal — Graphic Designer, Video Editor & Visual Communicator with luxury Apple-inspired glassmorphism aesthetic.",
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"],
+  "permissions": []
+}

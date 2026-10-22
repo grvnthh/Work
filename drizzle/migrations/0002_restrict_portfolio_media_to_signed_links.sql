@@ -1,0 +1,1 @@
+DROP POLICY "Published portfolio media is readable" ON storage.objects;

@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan to revert recent UI modifications back to the original design, eliminate automatic item deletion/restoration bugs in CMS storage synchronization, and fix Admin Dashboard lag by collapsing the duplicate live canvas preview by default and memoizing store resolution.",
+  "updatedAt":  "2026-10-21T13:39:42.656740586Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

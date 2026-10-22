@@ -1,0 +1,16 @@
+{
+  "syncState": {
+    "connected": false,
+    "root_folder_id": null,
+    "root_folder_name": null,
+    "access_token": null,
+    "sync_status": "not_connected",
+    "last_synced": null,
+    "last_error": null,
+    "start_page_token": null,
+    "total_sections": 0,
+    "total_projects": 0
+  },
+  "sections": [],
+  "projects": []
+}

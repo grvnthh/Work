@@ -1,0 +1,493 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --font-display: "Fraunces", "Instrument Serif", serif;
+  --font-sans: "Geist", "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+}
+
+:root {
+  --radius: 1rem;
+  --background: oklch(0.06 0 0);
+  --foreground: oklch(0.98 0 0);
+  --card: oklch(0.1 0 0);
+  --card-foreground: oklch(0.98 0 0);
+  --popover: oklch(0.1 0 0);
+  --popover-foreground: oklch(0.98 0 0);
+  --primary: oklch(0.98 0 0);
+  --primary-foreground: oklch(0.06 0 0);
+  --secondary: oklch(0.18 0 0);
+  --secondary-foreground: oklch(0.98 0 0);
+  --muted: oklch(0.16 0 0);
+  --muted-foreground: oklch(0.65 0 0);
+  --accent: oklch(0.22 0 0);
+  --accent-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.7 0 0);
+  --ease-premium: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    font-size: 16px;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+    font-weight: 400;
+    line-height: 1.6;
+    letter-spacing: -0.005em;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    line-height: 1.02;
+    font-optical-sizing: auto;
+  }
+  h1 {
+    font-weight: 800;
+    letter-spacing: -0.045em;
+  }
+  p {
+    line-height: 1.7;
+  }
+  ::selection {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+  }
+}
+
+@utility glass {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 20px 60px -20px rgba(0, 0, 0, 0.6);
+}
+
+@utility glass-strong {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04));
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 30px 80px -30px rgba(0, 0, 0, 0.8);
+}
+
+/* Restrained Liquid Glass UI surfaces with specular edge highlights and fallback */
+@utility liquid-glass {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.06) 100%),
+    rgba(12, 12, 14, 0.76);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.05),
+    0 18px 42px -14px rgba(0, 0, 0, 0.75);
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.07) 100%),
+      rgba(10, 10, 12, 0.62);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+  }
+}
+
+/* Inside the hardware-transformed infinite canvas, avoid per-card backdrop-filter re-sampling on every pan/zoom frame */
+.canvas-card-surface {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.canvas-card-surface .liquid-glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.05) 55%, rgba(255, 255, 255, 0.08) 100%),
+    rgba(10, 10, 12, 0.84);
+}
+
+/* While actively dragging/panning the canvas, skip per-card hover state changes, scaling and repaints */
+.is-panning .canvas-card-surface {
+  pointer-events: none !important;
+}
+
+@utility liquid-glass-modal {
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 60%),
+    rgba(10, 10, 12, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.24),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.05),
+    0 36px 90px -20px rgba(0, 0, 0, 0.88);
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    background:
+      linear-gradient(155deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.02) 60%),
+      rgba(10, 10, 12, 0.82);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+  }
+}
+
+@utility canvas-studio-grid {
+  background-color: #09090b;
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.04) 0%, transparent 70%),
+    radial-gradient(rgba(255, 255, 255, 0.11) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    32px 32px;
+}
+
+@utility text-balance {
+  text-wrap: balance;
+}
+@utility text-pretty {
+  text-wrap: pretty;
+}
+
+@utility grain {
+  position: relative;
+}
+
+/* Premium hover gradient border — draws a soft luminous ring on the card's edge */
+@utility card-glow {
+  position: relative;
+  isolation: isolate;
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: conic-gradient(
+      from 180deg at 50% 50%,
+      rgba(255, 255, 255, 0),
+      rgba(255, 255, 255, 0.55),
+      rgba(255, 255, 255, 0) 40%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 0.6s var(--ease-premium);
+    pointer-events: none;
+  }
+  &:hover::before {
+    opacity: 1;
+    animation: spin-slow 6s linear infinite;
+  }
+}
+
+/* Marquee gradient mask so the strip fades at the edges */
+@utility marquee-mask {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+}
+
+/* Keyframes */
+@keyframes float-slow {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(20px, -30px, 0) scale(1.05);
+  }
+}
+@keyframes float-slow-2 {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-30px, 20px, 0) scale(1.08);
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+@keyframes text-shine {
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
+}
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes aurora {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate3d(4%, -3%, 0) scale(1.15);
+    opacity: 0.85;
+  }
+}
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-3%, 4%, 0);
+  }
+}
+
+.animate-float-slow {
+  animation: float-slow 14s ease-in-out infinite;
+}
+.animate-float-slow-2 {
+  animation: float-slow-2 18s ease-in-out infinite;
+}
+.animate-marquee {
+  animation: marquee 35s linear infinite;
+}
+.animate-aurora {
+  animation: aurora 16s ease-in-out infinite;
+}
+.animate-drift {
+  animation: drift 22s ease-in-out infinite;
+}
+.animate-text-shine {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 1) 50%,
+    rgba(255, 255, 255, 0.4) 100%
+  );
+  background-size: 200% auto;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: text-shine 6s linear infinite;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  font-variation-settings: "opsz" 144;
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "ss01", "ss02";
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Orbs are composited layers; keep them on the GPU and out of layout */
+.orb {
+  border-radius: 9999px;
+  will-change: transform, opacity;
+  transform: translateZ(0);
+  contain: strict;
+}
+
+/* Keep sections permanently laid out so Lenis smooth scrolling and Framer Motion useScroll never hit content-visibility layout jumps */
+
+/* --- Cheap, compositor-only motion utilities --- */
+
+/* Gentle vertical float (transform only) */
+@keyframes float-y {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -8px, 0);
+  }
+}
+.animate-float-y {
+  animation: float-y 6s ease-in-out infinite;
+}
+
+/* Slow breathing opacity for ambient accents */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+.animate-breathe {
+  animation: breathe 5s ease-in-out infinite;
+}
+
+/* One-pass sheen that sweeps across a card on hover */
+@utility sheen {
+  position: relative;
+  overflow: hidden;
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translate3d(-120%, 0, 0);
+    background: linear-gradient(
+      100deg,
+      transparent 25%,
+      rgba(255, 255, 255, 0.1) 50%,
+      transparent 75%
+    );
+    pointer-events: none;
+    transition: transform 0.9s var(--ease-premium);
+  }
+  &:hover::after {
+    transform: translate3d(120%, 0, 0);
+  }
+}
+
+/* Smooth, GPU-friendly hover lift for cards and links */
+@utility hover-lift {
+  transition:
+    transform 0.5s var(--ease-premium),
+    border-color 0.5s var(--ease-premium),
+    background-color 0.5s var(--ease-premium);
+  &:hover {
+    transform: translate3d(0, -4px, 0);
+  }
+}
+
+/* Underline that wipes in from the left */
+@utility link-underline {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -2px;
+    height: 1px;
+    width: 100%;
+    background: currentColor;
+    transform: scaleX(0);
+    transform-origin: right;
+    transition: transform 0.5s var(--ease-premium);
+  }
+  &:hover::after {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+}
+
+/* Mobile / touch devices: drop the most expensive GPU work */
+@media (max-width: 900px), (pointer: coarse) {
+  .glass,
+  .glass-strong {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03)),
+      rgba(12, 12, 12, 0.82);
+  }
+  .grain-layer {
+    display: none;
+  }
+  .animate-aurora,
+  .animate-drift,
+  .animate-float-slow,
+  .animate-float-slow-2,
+  .animate-float-y,
+  .animate-breathe {
+    animation: none;
+  }
+  .card-glow::before {
+    display: none;
+  }
+  .sheen::after {
+    display: none;
+  }
+}

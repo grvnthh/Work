@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791003029897,
+      "tag": "0000_portfolio_cms",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791003102562,
+      "tag": "0001_portfolio_media_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791092214076,
+      "tag": "0002_restrict_portfolio_media_to_signed_links",
+      "breakpoints": true
+    }
+  ]
+}

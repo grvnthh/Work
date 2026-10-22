@@ -1,0 +1,2 @@
+CREATE POLICY "Public contact attachment uploads" ON storage.objects FOR INSERT TO anon, authenticated WITH CHECK (bucket_id = 'contact-attachments' AND name LIKE 'inquiries/%');
+CREATE POLICY "Public contact attachment links" ON storage.objects FOR SELECT TO anon, authenticated USING (bucket_id = 'contact-attachments' AND name LIKE 'inquiries/%');
