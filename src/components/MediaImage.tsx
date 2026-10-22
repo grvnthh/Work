@@ -103,6 +103,9 @@ export function isVideoSource(src?: string | null): boolean {
 function useResolvedMediaState(src?: string | null): { url: string; isResolving: boolean } {
   const normalized = normalizeCmsMediaUrl(src);
   const key = extractMediaKeyFromUrl(normalized);
+  const needsAsyncResolution = Boolean(
+    key && (normalized.includes("local=") || normalized.includes("inquiry=")),
+  );
   const isUnresolvedLocalCmsUrl = Boolean(
     key && key.startsWith("cms-") && normalized.includes("local="),
   );
@@ -131,7 +134,9 @@ function useResolvedMediaState(src?: string | null): { url: string; isResolving:
       return;
     }
 
-    if (!key) {
+    // If this is already a direct https:// signed URL, /media/ asset, blob:, or data: URL,
+    // use it directly and NEVER trigger IndexedDB / Cloud lookups or swap src mid-download.
+    if (!key || !needsAsyncResolution) {
       setState((prev) =>
         prev.url === normalized && !prev.isResolving
           ? prev
@@ -172,7 +177,7 @@ function useResolvedMediaState(src?: string | null): { url: string; isResolving:
     return () => {
       active = false;
     };
-  }, [normalized, key, isUnresolvedLocalCmsUrl]);
+  }, [normalized, key, needsAsyncResolution, isUnresolvedLocalCmsUrl]);
 
   return state;
 }
@@ -593,7 +598,7 @@ export const MediaImage = memo(function MediaImage({
   }
 
   const effectiveLoading = props.loading ?? "lazy";
-  const effectiveDecoding = props.decoding ?? (effectiveLoading === "eager" ? "sync" : "async");
+  const effectiveDecoding = props.decoding ?? "async";
 
   return (
     <img

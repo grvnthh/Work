@@ -67,8 +67,10 @@ export function PortfolioAdmin({
   onLocateOnCanvas,
 }: PortfolioAdminProps) {
   const navigate = useNavigate();
-  const [items, setItems] = useState<PortfolioCanvasProject[]>([]);
-  const [canUndo, setCanUndo] = useState<boolean>(false);
+  const [items, setItems] = useState<PortfolioCanvasProject[]>(
+    () => buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items,
+  );
+  const [canUndo, setCanUndo] = useState<boolean>(() => canUndoCmsAction());
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -680,7 +682,7 @@ export function PortfolioAdmin({
         </div>
 
         {/* Items Grid */}
-        {loading ? (
+        {loading && items.length === 0 ? (
           <div className="flex h-64 items-center justify-center rounded-3xl border border-white/10 bg-white/[0.02]">
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />

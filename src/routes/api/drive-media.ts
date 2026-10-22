@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   buildResolvedCanvasItemsFromStore,
+  extractMediaKeyFromUrl,
   mergeCmsStores,
   normalizeStore,
   type CanvasCmsStoreData,
@@ -17,6 +18,7 @@ interface InMemoryMediaEntry {
 
 const globalState = globalThis as unknown as {
   __GRVNTH_CMS_STORE__?: CanvasCmsStoreData;
+  __GRVNTH_CLOUD_STORE_CACHE__?: { store: CanvasCmsStoreData | null; fetchedAt: number };
   __GRVNTH_MEDIA_MAP__?: Map<string, InMemoryMediaEntry>;
   __GRVNTH_CHUNK_MAP__?: Map<string, Buffer[]>;
 };
@@ -189,15 +191,22 @@ async function downloadServerSupabaseText(storagePath: string): Promise<string |
   }
 }
 
-async function readSupabaseCanvasCmsStore(): Promise<CanvasCmsStoreData | null> {
+async function readSupabaseCanvasCmsStore(forceFresh = false): Promise<CanvasCmsStoreData | null> {
+  const now = Date.now();
+  const cached = globalState.__GRVNTH_CLOUD_STORE_CACHE__;
+  if (!forceFresh && cached && now - cached.fetchedAt < 8000) {
+    return cached.store;
+  }
+
   try {
-    const v5Files = await listServerSupabaseSnapshots(CMS_SNAPSHOT_PREFIX, 8);
+    const v5Files = await listServerSupabaseSnapshots(CMS_SNAPSHOT_PREFIX, 6);
     for (const file of v5Files) {
       const text = await downloadServerSupabaseText(`inquiries/${file.name}`);
       if (!text) continue;
       try {
         const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
         if (new Date(parsed.updatedAt || 0).getTime() > 0) {
+          globalState.__GRVNTH_CLOUD_STORE_CACHE__ = { store: parsed, fetchedAt: Date.now() };
           return parsed;
         }
       } catch {
@@ -205,7 +214,7 @@ async function readSupabaseCanvasCmsStore(): Promise<CanvasCmsStoreData | null> 
       }
     }
 
-    const v4Files = await listServerSupabaseSnapshots(LEGACY_SNAPSHOT_PREFIX, 10);
+    const v4Files = await listServerSupabaseSnapshots(LEGACY_SNAPSHOT_PREFIX, 6);
     for (const file of v4Files) {
       const text = await downloadServerSupabaseText(`inquiries/${file.name}`);
       if (!text) continue;
@@ -213,6 +222,7 @@ async function readSupabaseCanvasCmsStore(): Promise<CanvasCmsStoreData | null> 
         const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
         const t = new Date(parsed.updatedAt || 0).getTime();
         if (t > 0 && (parsed.addedItems.length > 0 || parsed.deletedIds.length > 0)) {
+          globalState.__GRVNTH_CLOUD_STORE_CACHE__ = { store: parsed, fetchedAt: Date.now() };
           return parsed;
         }
       } catch {
@@ -222,7 +232,7 @@ async function readSupabaseCanvasCmsStore(): Promise<CanvasCmsStoreData | null> 
   } catch {
     // Ignore cloud read error
   }
-  return null;
+  return cached?.store ?? null;
 }
 
 async function writeSupabaseCanvasCmsStore(store: CanvasCmsStoreData): Promise<void> {
@@ -230,6 +240,8 @@ async function writeSupabaseCanvasCmsStore(store: CanvasCmsStoreData): Promise<v
   try {
     const storeTime = new Date(store.updatedAt || 0).getTime();
     if (storeTime <= 0) return;
+
+    globalState.__GRVNTH_CLOUD_STORE_CACHE__ = { store, fetchedAt: Date.now() };
 
     const ts = Math.max(Date.now(), storeTime);
     const paddedTs = String(ts).padStart(15, "0");
@@ -720,22 +732,85 @@ export const Route = createFileRoute("/api/drive-media")({
             const body = (await request.json()) as {
               action?: string;
               store?: CanvasCmsStoreData;
+              urlMap?: Record<string, string>;
             };
-            if (body?.store) {
-              const incoming = normalizeStore(body.store);
-              let baseServerStore = readServerCanvasCmsStore();
-              if (body.action !== "forceSetStore") {
-                const cloudStore = await readSupabaseCanvasCmsStore();
-                if (cloudStore) {
-                  baseServerStore = mergeCmsStores(baseServerStore, cloudStore);
+
+            if (body?.action === "upgradeMediaUrls" && body.urlMap) {
+              const urlMap = body.urlMap;
+              const current = readServerCanvasCmsStore();
+              let modified = false;
+
+              for (let i = 0; i < current.addedItems.length; i += 1) {
+                const item = current.addedItems[i];
+                const primaryKey = extractMediaKeyFromUrl(item.videoUrl || item.imageUrl);
+                if (primaryKey && urlMap[primaryKey]) {
+                  const upgraded = urlMap[primaryKey];
+                  if (item.imageUrl !== upgraded || (item.videoUrl && item.videoUrl !== upgraded)) {
+                    current.addedItems[i] = {
+                      ...item,
+                      imageUrl: upgraded,
+                      ...(item.mediaType === "video" || item.videoUrl
+                        ? { videoUrl: upgraded }
+                        : {}),
+                    };
+                    modified = true;
+                  }
+                }
+
+                if (
+                  current.addedItems[i].extraMedia &&
+                  current.addedItems[i].extraMedia!.length > 0
+                ) {
+                  const updatedExtras = [...current.addedItems[i].extraMedia!];
+                  let extrasChanged = false;
+                  for (let eIdx = 0; eIdx < updatedExtras.length; eIdx += 1) {
+                    const extra = updatedExtras[eIdx];
+                    const extraKey = extractMediaKeyFromUrl(extra.videoUrl || extra.imageUrl);
+                    if (extraKey && urlMap[extraKey]) {
+                      const upgradedExtra = urlMap[extraKey];
+                      if (extra.imageUrl !== upgradedExtra) {
+                        updatedExtras[eIdx] = {
+                          ...extra,
+                          imageUrl: upgradedExtra,
+                          ...(extra.mediaType === "video" || extra.videoUrl
+                            ? { videoUrl: upgradedExtra }
+                            : {}),
+                        };
+                        extrasChanged = true;
+                        modified = true;
+                      }
+                    }
+                  }
+                  if (extrasChanged) {
+                    current.addedItems[i] = {
+                      ...current.addedItems[i],
+                      extraMedia: updatedExtras,
+                    };
+                  }
                 }
               }
-              const nextStore =
-                body.action === "forceSetStore"
-                  ? incoming
-                  : mergeCmsStores(incoming, baseServerStore);
+
+              if (modified) {
+                const saved = writeServerCanvasCmsStore(current);
+                void writeSupabaseCanvasCmsStore(saved);
+                return Response.json(buildResolvedCanvasItemsFromStore(saved));
+              }
+              return Response.json(buildResolvedCanvasItemsFromStore(current));
+            }
+
+            if (body?.store) {
+              const incoming = normalizeStore(body.store);
+              const baseServerStore = readServerCanvasCmsStore();
+              if (body.action === "forceSetStore") {
+                const inTime = new Date(incoming.updatedAt || 0).getTime();
+                const srvTime = new Date(baseServerStore.updatedAt || 0).getTime();
+                if (inTime > 0 && inTime <= srvTime) {
+                  incoming.updatedAt = new Date(srvTime + 1).toISOString();
+                }
+              }
+              const nextStore = mergeCmsStores(incoming, baseServerStore);
               const saved = writeServerCanvasCmsStore(nextStore);
-              await writeSupabaseCanvasCmsStore(saved);
+              void writeSupabaseCanvasCmsStore(saved);
               return Response.json(buildResolvedCanvasItemsFromStore(saved));
             }
             const current = readServerCanvasCmsStore();

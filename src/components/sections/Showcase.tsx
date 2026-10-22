@@ -80,6 +80,20 @@ function computeItemsSignature(items: PortfolioCanvasProject[]): string {
   return sig;
 }
 
+function computeLayoutSignature(items: PortfolioCanvasProject[]): string {
+  let sig = `${items.length}:`;
+  for (let i = 0; i < items.length; i += 1) {
+    const p = items[i];
+    const extrasSig = p.extraMedia
+      ? p.extraMedia
+          .map((m) => `${m.id}@${m.canvasX},${m.canvasY},${m.width},${m.height}`)
+          .join("|")
+      : "";
+    sig += `${p.id}@${p.canvasX},${p.canvasY},${p.width},${p.height},[${extrasSig}];`;
+  }
+  return sig;
+}
+
 interface CanvasProjectCardProps {
   project: PortfolioCanvasProject;
   isHighlighted: boolean;
@@ -166,8 +180,8 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
             alt={project.title}
             width={project.width}
             height={project.height}
-            loading="eager"
-            decoding="sync"
+            loading="lazy"
+            decoding="async"
             maxRenderDimension={720}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}
@@ -298,6 +312,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
   const [mounted, setMounted] = useState(false);
   const [cmsItems, setCmsItems] = useState<PortfolioCanvasProject[]>([]);
   const lastSignatureRef = useRef<string>(computeItemsSignature([]));
+  const lastLayoutSignatureRef = useRef<string>(computeLayoutSignature([]));
 
   useEffect(() => {
     setMounted(true);
@@ -727,13 +742,15 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
   useEffect(() => {
     let active = true;
     const initialLocalItems = buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items;
+    lastLayoutSignatureRef.current = computeLayoutSignature(initialLocalItems);
     updateCmsItemsIfChanged(initialLocalItems);
 
     const applyIncomingItemsAndCenterIfNeeded = (nextItems: PortfolioCanvasProject[]) => {
-      const nextSig = computeItemsSignature(nextItems);
-      const changed = nextSig !== lastSignatureRef.current;
+      const nextLayoutSig = computeLayoutSignature(nextItems);
+      const layoutChanged = nextLayoutSig !== lastLayoutSignatureRef.current;
+      lastLayoutSignatureRef.current = nextLayoutSig;
       updateCmsItemsIfChanged(nextItems);
-      if (changed && nextItems.length > 0 && camRef.current.mode !== "dragging") {
+      if (layoutChanged && nextItems.length > 0 && camRef.current.mode !== "dragging") {
         window.setTimeout(() => {
           if (!active || camRef.current.mode === "dragging") return;
           centerOnBestTarget(420);

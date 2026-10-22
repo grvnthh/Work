@@ -37,6 +37,7 @@ export interface UploadedMediaDescriptor {
 }
 
 const LOCAL_STORAGE_KEY = "grvnth_canvas_cms_store_v3";
+const CLOUD_UPLOADED_KEYS_STORAGE_KEY = "grvnth_cms_uploaded_cloud_keys_v1";
 const BROADCAST_CHANNEL_NAME = "grvnth_canvas_cms_channel";
 const IDB_NAME = "grvnth_cms_media_idb";
 const IDB_STORE = "media_files";
@@ -52,10 +53,45 @@ let memoryStore: CanvasCmsStoreData | null = null;
 const undoHistoryStack: CanvasCmsStoreData[] = [];
 let mutationVersion = 0;
 let pendingPushPromise: Promise<void> | null = null;
+let isBackgroundHealingRunning = false;
 const objectUrlCache = new Map<string, string>();
 const cloudSignedUrlCache = new Map<string, string>();
 const cloudUploadedKeys = new Set<string>();
 let broadcastChannel: BroadcastChannel | null = null;
+
+if (typeof window !== "undefined") {
+  try {
+    const rawKeys = window.localStorage.getItem(CLOUD_UPLOADED_KEYS_STORAGE_KEY);
+    if (rawKeys) {
+      const parsed = JSON.parse(rawKeys) as unknown;
+      if (Array.isArray(parsed)) {
+        for (const k of parsed) {
+          if (typeof k === "string" && k) cloudUploadedKeys.add(k);
+        }
+      }
+    }
+  } catch {
+    // Ignore storage error
+  }
+}
+
+function markKeyCloudUploaded(key: string, signedUrl?: string): void {
+  if (!key) return;
+  cloudUploadedKeys.add(key);
+  if (signedUrl) {
+    cloudSignedUrlCache.set(key, signedUrl);
+  }
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(
+        CLOUD_UPLOADED_KEYS_STORAGE_KEY,
+        JSON.stringify(Array.from(cloudUploadedKeys)),
+      );
+    } catch {
+      // Ignore quota error
+    }
+  }
+}
 
 function getSupabaseRestConfig(): { url: string; key: string } {
   const metaEnv = (
@@ -715,12 +751,12 @@ async function uploadMediaBlobToSupabaseCloud(key: string, blob: Blob): Promise<
         blob.type || "application/octet-stream",
       );
       if (uploaded) {
-        cloudUploadedKeys.add(key);
+        markKeyCloudUploaded(key);
       }
     }
     const signedUrl = await createSupabaseSignedUrlRest(storagePath, TEN_YEARS_SECONDS);
     if (signedUrl) {
-      cloudSignedUrlCache.set(key, signedUrl);
+      markKeyCloudUploaded(key, signedUrl);
       return signedUrl;
     }
   } catch {
@@ -736,8 +772,7 @@ export async function getCloudSignedUrlForMediaKey(key: string): Promise<string 
   try {
     const signedUrl = await createSupabaseSignedUrlRest(`inquiries/${key}`, TEN_YEARS_SECONDS);
     if (signedUrl) {
-      cloudUploadedKeys.add(key);
-      cloudSignedUrlCache.set(key, signedUrl);
+      markKeyCloudUploaded(key, signedUrl);
       return signedUrl;
     }
   } catch {
@@ -763,7 +798,6 @@ export async function getMediaObjectUrlFromIdb(
     const url = existingMatchedUrl ?? URL.createObjectURL(found.blob);
     objectUrlCache.set(key, url);
     objectUrlCache.set(found.matchedKey, url);
-    void uploadMediaBlobToSupabaseCloud(key, found.blob);
     return url;
   }
 
@@ -814,17 +848,56 @@ export function getCachedObjectUrlForMedia(url?: string | null): string | null {
   return objectUrlCache.get(key) ?? null;
 }
 
+function registerStoreKnownCloudUrls(store: CanvasCmsStoreData): void {
+  for (const item of store.addedItems) {
+    for (const candidateUrl of [item.imageUrl, item.videoUrl]) {
+      if (candidateUrl && candidateUrl.startsWith("https://")) {
+        const key = extractMediaKeyFromUrl(candidateUrl);
+        if (key && key.startsWith("cms-")) {
+          markKeyCloudUploaded(key, candidateUrl);
+        }
+      }
+    }
+    if (item.extraMedia) {
+      for (const extra of item.extraMedia) {
+        for (const candidateUrl of [extra.imageUrl, extra.videoUrl]) {
+          if (candidateUrl && candidateUrl.startsWith("https://")) {
+            const key = extractMediaKeyFromUrl(candidateUrl);
+            if (key && key.startsWith("cms-")) {
+              markKeyCloudUploaded(key, candidateUrl);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 async function resolveBestDurableMediaUrl(url?: string | null): Promise<string | null> {
   if (!url) return null;
   const trimmed = url.trim();
   if (!trimmed) return null;
+
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+    const existingKey = extractMediaKeyFromUrl(trimmed);
+    if (existingKey && existingKey.startsWith("cms-")) {
+      markKeyCloudUploaded(existingKey, trimmed);
+    }
+    return trimmed;
+  }
 
   const key = extractMediaKeyFromUrl(trimmed);
   if (!key || !key.startsWith("cms-")) {
     return trimmed;
   }
 
-  // 1. Check IndexedDB first
+  // 1. Check Supabase Cloud signed URL first (fast JSON POST) before uploading multi-MB blobs
+  const existingCloudSigned = await getCloudSignedUrlForMediaKey(key);
+  if (existingCloudSigned) {
+    return existingCloudSigned;
+  }
+
+  // 2. Check IndexedDB
   const idbFound = await getMediaBlobFromIdb(key);
   if (idbFound) {
     if (!objectUrlCache.has(key)) {
@@ -833,39 +906,11 @@ async function resolveBestDurableMediaUrl(url?: string | null): Promise<string |
       objectUrlCache.set(idbFound.matchedKey, objUrl);
     }
 
-    // Re-hydrate local server in background if missing
-    void fetch(`/api/drive-media?local=${encodeURIComponent(key)}&check=1`)
-      .then((r) => (r.ok ? (r.json() as Promise<{ exists?: boolean }>) : null))
-      .then((status) => {
-        if (status && status.exists === false) {
-          void fetch(
-            `/api/drive-media?filename=${encodeURIComponent(key)}&localKey=${encodeURIComponent(key)}`,
-            {
-              method: "POST",
-              headers: {
-                "x-file-name": encodeURIComponent(key),
-                "x-file-type": idbFound.blob.type || "application/octet-stream",
-              },
-              body: idbFound.blob,
-            },
-          ).catch(() => {});
-        }
-      })
-      .catch(() => {});
-
-    // Ensure Supabase Cloud has a copy and return 10-year CDN signed URL so store URLs survive any container rebuild
     const cloudSigned = await uploadMediaBlobToSupabaseCloud(key, idbFound.blob);
     if (cloudSigned) {
       return cloudSigned;
     }
     return trimmed;
-  }
-
-  // 2. Check Supabase Cloud signed URL directly
-  const cloudSigned = await getCloudSignedUrlForMediaKey(key);
-  if (cloudSigned) {
-    objectUrlCache.set(key, cloudSigned);
-    return cloudSigned;
   }
 
   // 3. Check if server has the file and hydrate IndexedDB + Cloud
@@ -895,62 +940,122 @@ async function resolveBestDurableMediaUrl(url?: string | null): Promise<string |
   return trimmed;
 }
 
-async function healAndValidateStoreMedia(
-  store: CanvasCmsStoreData,
-): Promise<{ store: CanvasCmsStoreData; modified: boolean }> {
-  if (typeof window === "undefined") {
-    return { store, modified: false };
-  }
+/**
+ * Surgically upgrades local=/api/drive-media URLs in-place to 10-year https:// signed URLs
+ * WITHOUT modifying updatedAt, deletedIds, item membership, or coordinates, so background
+ * media healing can NEVER overwrite or revert any user CMS edit.
+ */
+function applyUpgradedMediaUrlsToStore(urlMap: Record<string, string>): void {
+  const keys = Object.keys(urlMap);
+  if (keys.length === 0) return;
 
+  const store = readLocalCmsStore();
   let modified = false;
 
-  await Promise.all(
-    store.addedItems.map(async (item, idx) => {
-      const primaryUrl = item.videoUrl || item.imageUrl;
-      if (primaryUrl) {
-        const upgraded = await resolveBestDurableMediaUrl(primaryUrl);
-        if (upgraded && upgraded !== primaryUrl && primaryUrl.includes("local=")) {
-          store.addedItems[idx] = {
-            ...store.addedItems[idx],
-            imageUrl: upgraded,
-            ...(item.mediaType === "video" || item.videoUrl ? { videoUrl: upgraded } : {}),
-          };
-          modified = true;
-        }
+  for (let i = 0; i < store.addedItems.length; i += 1) {
+    const item = store.addedItems[i];
+    const primaryKey = extractMediaKeyFromUrl(item.videoUrl || item.imageUrl);
+    if (primaryKey && urlMap[primaryKey]) {
+      const upgraded = urlMap[primaryKey];
+      if (item.imageUrl !== upgraded || (item.videoUrl && item.videoUrl !== upgraded)) {
+        store.addedItems[i] = {
+          ...item,
+          imageUrl: upgraded,
+          ...(item.mediaType === "video" || item.videoUrl ? { videoUrl: upgraded } : {}),
+        };
+        modified = true;
       }
+    }
 
-      if (item.extraMedia && item.extraMedia.length > 0) {
-        const updatedExtras = [...item.extraMedia];
-        let extrasChanged = false;
-        for (let eIdx = 0; eIdx < updatedExtras.length; eIdx += 1) {
-          const extra = updatedExtras[eIdx];
-          const extraUrl = extra.videoUrl || extra.imageUrl;
-          if (extraUrl) {
-            const upgradedExtra = await resolveBestDurableMediaUrl(extraUrl);
-            if (upgradedExtra && upgradedExtra !== extraUrl && extraUrl.includes("local=")) {
-              updatedExtras[eIdx] = {
-                ...extra,
-                imageUrl: upgradedExtra,
-                ...(extra.mediaType === "video" || extra.videoUrl
-                  ? { videoUrl: upgradedExtra }
-                  : {}),
-              };
-              extrasChanged = true;
-              modified = true;
-            }
+    if (store.addedItems[i].extraMedia && store.addedItems[i].extraMedia!.length > 0) {
+      const updatedExtras = [...store.addedItems[i].extraMedia!];
+      let extrasChanged = false;
+      for (let eIdx = 0; eIdx < updatedExtras.length; eIdx += 1) {
+        const extra = updatedExtras[eIdx];
+        const extraKey = extractMediaKeyFromUrl(extra.videoUrl || extra.imageUrl);
+        if (extraKey && urlMap[extraKey]) {
+          const upgradedExtra = urlMap[extraKey];
+          if (extra.imageUrl !== upgradedExtra) {
+            updatedExtras[eIdx] = {
+              ...extra,
+              imageUrl: upgradedExtra,
+              ...(extra.mediaType === "video" || extra.videoUrl ? { videoUrl: upgradedExtra } : {}),
+            };
+            extrasChanged = true;
+            modified = true;
           }
         }
-        if (extrasChanged) {
-          store.addedItems[idx] = {
-            ...store.addedItems[idx],
-            extraMedia: updatedExtras,
-          };
+      }
+      if (extrasChanged) {
+        store.addedItems[i] = {
+          ...store.addedItems[i],
+          extraMedia: updatedExtras,
+        };
+      }
+    }
+  }
+
+  if (!modified) return;
+
+  persistStoreLocally(store);
+  const resolved = buildResolvedCanvasItemsFromStore(store);
+  broadcastCanvasCmsUpdate(resolved.items);
+
+  void fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "upgradeMediaUrls",
+      urlMap,
+    }),
+  }).catch(() => {});
+}
+
+function scheduleBackgroundMediaHealing(store: CanvasCmsStoreData): void {
+  if (typeof window === "undefined" || isBackgroundHealingRunning) return;
+
+  const keysToHeal: Array<{ key: string; url: string }> = [];
+  const seenKeys = new Set<string>();
+
+  for (const item of store.addedItems) {
+    const primaryUrl = item.videoUrl || item.imageUrl;
+    if (primaryUrl && primaryUrl.includes("local=")) {
+      const key = extractMediaKeyFromUrl(primaryUrl);
+      if (key && key.startsWith("cms-") && !seenKeys.has(key)) {
+        seenKeys.add(key);
+        keysToHeal.push({ key, url: primaryUrl });
+      }
+    }
+    if (item.extraMedia) {
+      for (const extra of item.extraMedia) {
+        const extraUrl = extra.videoUrl || extra.imageUrl;
+        if (extraUrl && extraUrl.includes("local=")) {
+          const key = extractMediaKeyFromUrl(extraUrl);
+          if (key && key.startsWith("cms-") && !seenKeys.has(key)) {
+            seenKeys.add(key);
+            keysToHeal.push({ key, url: extraUrl });
+          }
         }
       }
-    }),
-  );
+    }
+  }
 
-  return { store, modified };
+  if (keysToHeal.length === 0) return;
+
+  isBackgroundHealingRunning = true;
+  void (async () => {
+    try {
+      for (const entry of keysToHeal) {
+        const upgraded = await resolveBestDurableMediaUrl(entry.url);
+        if (upgraded && upgraded.startsWith("https://")) {
+          applyUpgradedMediaUrlsToStore({ [entry.key]: upgraded });
+        }
+      }
+    } finally {
+      isBackgroundHealingRunning = false;
+    }
+  })();
 }
 
 /**
@@ -1032,8 +1137,8 @@ async function recoverOrphanedIdbMediaIfStoreEmpty(
     const pos = findDistinctRandomCanvasPosition(occupiedRects, width, height, undefined, true);
     occupiedRects.push({ canvasX: pos.canvasX, canvasY: pos.canvasY, width, height });
 
-    const cloudUrl = await uploadMediaBlobToSupabaseCloud(key, blob);
-    const finalUrl = cloudUrl || `/api/drive-media?local=${encodeURIComponent(key)}`;
+    const finalUrl =
+      cloudSignedUrlCache.get(key) || `/api/drive-media?local=${encodeURIComponent(key)}`;
     const rawSlug = getCmsKeySuffix(key).replace(/\.[^.]+$/, "");
     const title =
       rawSlug.replace(/[-_]+/g, " ").trim() || (isVideo ? "Studio Video" : "Studio Artwork");
@@ -1184,8 +1289,9 @@ export async function measureUrlCanvasDimensions(
 }
 
 /**
- * Uploads one or more image/video files to IndexedDB + /api/drive-media using direct binary streaming
- * for maximum capacity (supports multi-GB files without buffering in memory).
+ * Uploads one or more image/video files to IndexedDB + /api/drive-media + Supabase Cloud.
+ * Immediately caches the blob in IndexedDB + objectUrlCache so the CMS & Portfolio render
+ * in 0ms, and bounds blocking upload wait to 3.5s per file (continuing in background if larger).
  */
 export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMediaDescriptor[]> {
   if (files.length === 0) return [];
@@ -1220,69 +1326,39 @@ export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMedi
     // 1. Immediately cache the binary file in IndexedDB + objectUrlCache for instant zero-latency rendering
     await saveMediaBlobToIdb(localKey, file);
 
-    // 2. Upload directly to Supabase Storage (inquiries/ prefix satisfies RLS) in parallel with /api/drive-media
-    const cloudUploadPromise = uploadMediaBlobToSupabaseCloud(localKey, file);
-
-    let finalUrl = `/api/drive-media?local=${encodeURIComponent(localKey)}`;
-    let finalMediaType: "image" | "video" = isVideo ? "video" : "image";
-    let finalTitle = cleanTitle;
-
-    try {
-      let response = await fetch(
-        `/api/drive-media?filename=${encodeURIComponent(file.name)}&localKey=${encodeURIComponent(localKey)}`,
-        {
-          method: "POST",
-          headers: {
-            "x-file-name": encodeURIComponent(file.name),
-            "x-file-type": file.type || "application/octet-stream",
-          },
-          body: file,
+    // 2. Start server upload + Supabase Cloud upload in background
+    void fetch(
+      `/api/drive-media?filename=${encodeURIComponent(file.name)}&localKey=${encodeURIComponent(localKey)}`,
+      {
+        method: "POST",
+        headers: {
+          "x-file-name": encodeURIComponent(file.name),
+          "x-file-type": file.type || "application/octet-stream",
         },
-      ).catch(() => null);
+        body: file,
+      },
+    ).catch(() => {});
 
-      if (!response || !response.ok) {
-        const formData = new FormData();
-        formData.append("files", file);
-        response = await fetch(`/api/drive-media?localKey=${encodeURIComponent(localKey)}`, {
-          method: "POST",
-          body: formData,
-        }).catch(() => null);
+    const cloudUploadPromise = uploadMediaBlobToSupabaseCloud(localKey, file).then((signedUrl) => {
+      if (signedUrl) {
+        applyUpgradedMediaUrlsToStore({ [localKey]: signedUrl });
       }
+      return signedUrl;
+    });
 
-      if (response && response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          files?: Array<{
-            filename: string;
-            url: string;
-            mediaType: "image" | "video";
-            title: string;
-          }>;
-        } | null;
+    // Wait up to 3.5s for the cloud URL; if larger/slower, return immediately with localKey (already in objectUrlCache)
+    // and let cloudUploadPromise upgrade the URL in-place when finished.
+    const cloudSignedUrl = await Promise.race([
+      cloudUploadPromise.catch(() => null),
+      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 3500)),
+    ]);
 
-        const uploaded = payload?.files?.[0];
-        if (uploaded) {
-          if (uploaded.filename && uploaded.filename !== localKey) {
-            await saveMediaBlobToIdb(uploaded.filename, file);
-            await uploadMediaBlobToSupabaseCloud(uploaded.filename, file);
-          }
-          finalUrl = uploaded.url || finalUrl;
-          finalMediaType = uploaded.mediaType || finalMediaType;
-          finalTitle = uploaded.title || finalTitle;
-        }
-      }
-    } catch {
-      // IndexedDB + Supabase Cloud already hold localKey
-    }
-
-    const cloudSignedUrl = await cloudUploadPromise.catch(() => null);
-    if (cloudSignedUrl) {
-      finalUrl = cloudSignedUrl;
-    }
+    const finalUrl = cloudSignedUrl || `/api/drive-media?local=${encodeURIComponent(localKey)}`;
 
     results.push({
       url: finalUrl,
-      mediaType: finalMediaType,
-      title: finalTitle,
+      mediaType: isVideo ? "video" : "image",
+      title: cleanTitle,
       width: dims.width,
       height: dims.height,
     });
@@ -1318,37 +1394,81 @@ export function mergeCmsStores(
   const newerTime = Math.max(pTime, sTime);
   const olderTime = Math.min(pTime, sTime);
 
-  // When one store has a strictly newer timestamp, its deletedIds, overrides, and item coordinates
-  // are authoritative so Undo, Random Pos, Shuffle All, Delete, and Clear All never get reverted.
-  const deletedSet =
-    newerTime > olderTime
-      ? new Set<string>(newer.deletedIds)
-      : new Set<string>([...newer.deletedIds, ...older.deletedIds]);
+  // Build a lookup of any already-upgraded https:// URLs in the older store by media key
+  const olderCloudUrlByKey = new Map<string, string>();
+  for (const oldItem of older.addedItems) {
+    const oldUrl = oldItem.videoUrl || oldItem.imageUrl;
+    if (oldUrl && oldUrl.startsWith("https://")) {
+      const k = extractMediaKeyFromUrl(oldUrl);
+      if (k) olderCloudUrlByKey.set(k, oldUrl);
+    }
+  }
 
+  const upgradeItemUrlIfAvailable = (item: PortfolioCanvasProject): PortfolioCanvasProject => {
+    const curUrl = item.videoUrl || item.imageUrl;
+    if (curUrl && curUrl.includes("local=")) {
+      const k = extractMediaKeyFromUrl(curUrl);
+      const upgraded = k ? (cloudSignedUrlCache.get(k) ?? olderCloudUrlByKey.get(k)) : undefined;
+      if (upgraded) {
+        return {
+          ...item,
+          imageUrl: upgraded,
+          ...(item.mediaType === "video" || item.videoUrl ? { videoUrl: upgraded } : {}),
+        };
+      }
+    }
+    return item;
+  };
+
+  // When one store has a strictly newer timestamp, its addedItems list, deletedIds, overrides,
+  // and item coordinates are 100% authoritative so Upload, Delete, Clear All, Undo, Random Pos,
+  // and Shuffle All are NEVER reverted or polluted by stale items.
+  if (newerTime > olderTime) {
+    const deletedSet = new Set<string>(newer.deletedIds);
+    const mergedAddedItems: PortfolioCanvasProject[] = [];
+    const seenIds = new Set<string>();
+
+    for (const item of newer.addedItems) {
+      if (!deletedSet.has(item.id) && !seenIds.has(item.id)) {
+        seenIds.add(item.id);
+        mergedAddedItems.push(upgradeItemUrlIfAvailable(item));
+      }
+    }
+
+    const mergedOverrides: Record<string, Partial<PortfolioCanvasProject>> = {
+      ...newer.overrides,
+    };
+    for (const delId of deletedSet) {
+      delete mergedOverrides[delId];
+    }
+
+    return {
+      addedItems: mergedAddedItems,
+      deletedIds: Array.from(deletedSet),
+      overrides: mergedOverrides,
+      updatedAt: new Date(newerTime).toISOString(),
+      ...(newer.lastFocusedId && !deletedSet.has(newer.lastFocusedId)
+        ? { lastFocusedId: newer.lastFocusedId }
+        : {}),
+    };
+  }
+
+  // Exact same timestamp: union non-deleted items and carry over any https:// URL upgrades
+  const deletedSet = new Set<string>([...newer.deletedIds, ...older.deletedIds]);
   const mergedAddedItems: PortfolioCanvasProject[] = [];
   const seenIds = new Set<string>();
 
-  for (const item of newer.addedItems) {
+  for (const item of [...newer.addedItems, ...older.addedItems]) {
     if (!deletedSet.has(item.id) && !seenIds.has(item.id)) {
       seenIds.add(item.id);
-      mergedAddedItems.push(item);
+      mergedAddedItems.push(upgradeItemUrlIfAvailable(item));
     }
   }
 
-  // Only include items from older store if they weren't deleted and newer wasn't a full clear
-  if (newer.addedItems.length > 0 || newer.deletedIds.length === 0) {
-    for (const item of older.addedItems) {
-      if (!deletedSet.has(item.id) && !seenIds.has(item.id)) {
-        seenIds.add(item.id);
-        mergedAddedItems.push(item);
-      }
-    }
-  }
-
-  const mergedOverrides: Record<string, Partial<PortfolioCanvasProject>> = newerTime > olderTime
-    ? { ...newer.overrides }
-    : { ...older.overrides, ...newer.overrides };
-
+  const mergedOverrides: Record<string, Partial<PortfolioCanvasProject>> = {
+    ...older.overrides,
+    ...newer.overrides,
+  };
   for (const delId of deletedSet) {
     delete mergedOverrides[delId];
   }
@@ -1368,7 +1488,7 @@ export function mergeCmsStores(
 
 async function readCloudCmsStoreSnapshot(): Promise<CanvasCmsStoreData | null> {
   try {
-    const v5Files = await listSupabaseSnapshotsRest(CMS_SNAPSHOT_PREFIX, 8);
+    const v5Files = await listSupabaseSnapshotsRest(CMS_SNAPSHOT_PREFIX, 6);
     for (const file of v5Files) {
       const text = await downloadSupabaseObjectTextRest(`inquiries/${file.name}`);
       if (!text) continue;
@@ -1383,7 +1503,7 @@ async function readCloudCmsStoreSnapshot(): Promise<CanvasCmsStoreData | null> {
     }
 
     // Fallback to non-empty v4 snapshots if no v5 snapshot exists yet
-    const v4Files = await listSupabaseSnapshotsRest(LEGACY_SNAPSHOT_PREFIX, 10);
+    const v4Files = await listSupabaseSnapshotsRest(LEGACY_SNAPSHOT_PREFIX, 6);
     for (const file of v4Files) {
       const text = await downloadSupabaseObjectTextRest(`inquiries/${file.name}`);
       if (!text) continue;
@@ -1459,45 +1579,67 @@ export function pushStoreToServer(store: CanvasCmsStoreData, forceReplace = fals
 
 export async function flushPendingCmsPush(): Promise<void> {
   if (pendingPushPromise) {
-    await pendingPushPromise.catch(() => {});
+    await Promise.race([
+      pendingPushPromise.catch(() => {}),
+      new Promise<void>((resolve) => window.setTimeout(resolve, 2500)),
+    ]);
+  }
+}
+
+async function fetchServerCmsStoreWithTimeout(
+  timeoutMs = 3500,
+): Promise<CanvasCmsStoreData | null> {
+  if (typeof window === "undefined") return null;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+      },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { store?: Partial<CanvasCmsStoreData> };
+    return data?.store ? normalizeStore(data.store) : null;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 
 export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState> {
   if (pendingPushPromise) {
-    await pendingPushPromise.catch(() => {});
+    await Promise.race([
+      pendingPushPromise.catch(() => {}),
+      new Promise<void>((resolve) => window.setTimeout(resolve, 2500)),
+    ]);
   }
 
   const versionBeforeFetch = mutationVersion;
-  let chosenStore = readLocalCmsStore();
 
-  const [serverResult, cloudResult, idbBackupResult] = await Promise.allSettled([
-    fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
-      method: "GET",
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-        "Cache-Control": "no-cache",
-      },
-    }).then(async (res) => {
-      if (!res.ok) return null;
-      const data = (await res.json()) as { store?: Partial<CanvasCmsStoreData> };
-      return data?.store ? normalizeStore(data.store) : null;
-    }),
-    readCloudCmsStoreSnapshot(),
+  const [serverStore, idbBackupStore] = await Promise.all([
+    fetchServerCmsStoreWithTimeout(3500),
     readIdbStoreBackup(),
   ]);
 
-  if (mutationVersion !== versionBeforeFetch) {
-    return buildResolvedCanvasItemsFromStore(readLocalCmsStore());
+  let cloudStore: CanvasCmsStoreData | null = null;
+  const serverTime = new Date(serverStore?.updatedAt || 0).getTime();
+  if (serverTime <= 0) {
+    cloudStore = await readCloudCmsStoreSnapshot();
   }
 
-  const latestLocalStore = readLocalCmsStore();
-  chosenStore = latestLocalStore;
+  if (mutationVersion !== versionBeforeFetch) {
+    const current = readLocalCmsStore();
+    registerStoreKnownCloudUrls(current);
+    return buildResolvedCanvasItemsFromStore(current);
+  }
 
-  const idbBackupStore = idbBackupResult.status === "fulfilled" ? idbBackupResult.value : null;
-  const serverStore = serverResult.status === "fulfilled" ? serverResult.value : null;
-  const cloudStore = cloudResult.status === "fulfilled" ? cloudResult.value : null;
+  let chosenStore = readLocalCmsStore();
 
   if (idbBackupStore) {
     chosenStore = mergeCmsStores(chosenStore, idbBackupStore);
@@ -1515,31 +1657,22 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
     chosenStore = recovery.store;
   }
 
-  const healed = await healAndValidateStoreMedia(chosenStore);
-  if (healed.modified) {
-    chosenStore = {
-      ...healed.store,
-      updatedAt: new Date().toISOString(),
-    };
+  if (mutationVersion !== versionBeforeFetch) {
+    const current = readLocalCmsStore();
+    registerStoreKnownCloudUrls(current);
+    return buildResolvedCanvasItemsFromStore(current);
   }
 
+  registerStoreKnownCloudUrls(chosenStore);
   persistStoreLocally(chosenStore);
 
-  const serverTime = new Date(serverStore?.updatedAt || 0).getTime();
-  const cloudTime = new Date(cloudStore?.updatedAt || 0).getTime();
   const chosenTime = new Date(chosenStore.updatedAt || 0).getTime();
-
-  if (
-    chosenTime > 0 &&
-    (recovery.recovered ||
-      healed.modified ||
-      chosenTime > serverTime ||
-      chosenTime > cloudTime ||
-      chosenStore.addedItems.length !== (cloudStore?.addedItems.length ?? 0) ||
-      chosenStore.addedItems.length !== (serverStore?.addedItems.length ?? 0))
-  ) {
+  if (chosenTime > 0 && (recovery.recovered || chosenTime > serverTime)) {
     void pushStoreToServer(chosenStore, true);
   }
+
+  // Heal any remaining local= URLs sequentially 1-at-a-time in the background without blocking UI or bumping updatedAt
+  scheduleBackgroundMediaHealing(chosenStore);
 
   return buildResolvedCanvasItemsFromStore(chosenStore);
 }
