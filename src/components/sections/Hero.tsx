@@ -12,7 +12,7 @@ export function Hero() {
   const y1 = useTransform(scrollYProgress, [0, 1], [0, -120]);
   const y2 = useTransform(scrollYProgress, [0, 1], [0, 80]);
   const opacity = useTransform(scrollYProgress, [0, 0.8], [1, 0]);
-  const heroY = useTransform(scrollYProgress, [0, 1], [0, 80]);
+  const heroY = useTransform(scrollYProgress, [0, 1], [0, -24]);
 
   // pointer parallax on floating shapes
   const mx = useMotionValue(0);
@@ -192,7 +192,7 @@ export function Hero() {
           opacity: { delay: 1.8, duration: 1 },
           y: { duration: 2.4, repeat: Infinity, ease: "easeInOut" },
         }}
-        className="absolute bottom-4 left-1/2 hidden -translate-x-1/2 flex-col items-center gap-2 text-[0.6rem] uppercase tracking-[0.4em] text-muted-foreground md:flex [@media(max-height:720px)]:hidden"
+        className="absolute bottom-4 left-1/2 hidden -translate-x-1/2 flex-col items-center gap-2 text-[0.6rem] uppercase tracking-[0.4em] text-muted-foreground md:flex [@media(max-height:860px)]:hidden"
       >
         <span>Scroll</span>
         <span className="h-8 w-px bg-gradient-to-b from-foreground/60 to-transparent" />

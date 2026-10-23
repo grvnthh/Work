@@ -6,6 +6,7 @@ import {
   extractMediaKeyFromUrl,
   mergeCmsStores,
   normalizeStore,
+  settleStoreNonOverlappingPositions,
   type CanvasCmsStoreData,
 } from "@/lib/cms-storage";
 import { fetchAndCacheDriveFile } from "@/lib/drive-cms/media-cache";
@@ -279,11 +280,15 @@ export function readServerCanvasCmsStore(): CanvasCmsStoreData {
 
   const memStore = globalState.__GRVNTH_CMS_STORE__ ?? null;
   if (diskStore && memStore) {
-    const merged = mergeCmsStores(memStore, diskStore);
-    globalState.__GRVNTH_CMS_STORE__ = merged;
-    return merged;
+    const diskTime = new Date(diskStore.updatedAt || 0).getTime();
+    const memTime = new Date(memStore.updatedAt || 0).getTime();
+    const best = memTime >= diskTime ? memStore : diskStore;
+    settleStoreNonOverlappingPositions(best);
+    globalState.__GRVNTH_CMS_STORE__ = best;
+    return best;
   }
   if (diskStore) {
+    settleStoreNonOverlappingPositions(diskStore);
     globalState.__GRVNTH_CMS_STORE__ = diskStore;
     return diskStore;
   }
@@ -298,6 +303,7 @@ export function writeServerCanvasCmsStore(store: CanvasCmsStoreData): CanvasCmsS
     ...store,
     updatedAt: store.updatedAt || new Date().toISOString(),
   });
+  settleStoreNonOverlappingPositions(next);
   globalState.__GRVNTH_CMS_STORE__ = next;
 
   try {
@@ -618,10 +624,16 @@ export const Route = createFileRoute("/api/drive-media")({
 
         if (url.searchParams.get("cmsState") === "1") {
           let store = readServerCanvasCmsStore();
-          const cloudStore = await readSupabaseCanvasCmsStore();
-          if (cloudStore) {
-            store = mergeCmsStores(store, cloudStore);
-            writeServerCanvasCmsStore(store);
+          const storeTime = new Date(store.updatedAt || 0).getTime();
+          // Only pull from Supabase Storage if the server has never had any items initialized (cold start recovery)
+          if (storeTime <= 0 && store.addedItems.length === 0 && store.deletedIds.length === 0) {
+            const cloudStore = await readSupabaseCanvasCmsStore();
+            if (
+              cloudStore &&
+              (cloudStore.addedItems.length > 0 || cloudStore.deletedIds.length > 0)
+            ) {
+              store = writeServerCanvasCmsStore(cloudStore);
+            }
           }
           const resolved = buildResolvedCanvasItemsFromStore(store);
           return Response.json(resolved);
@@ -848,16 +860,8 @@ export const Route = createFileRoute("/api/drive-media")({
 
             if (body?.store) {
               const incoming = normalizeStore(body.store);
-              const baseServerStore = readServerCanvasCmsStore();
-              if (body.action === "forceSetStore") {
-                const inTime = new Date(incoming.updatedAt || 0).getTime();
-                const srvTime = new Date(baseServerStore.updatedAt || 0).getTime();
-                if (inTime > 0 && inTime <= srvTime) {
-                  incoming.updatedAt = new Date(srvTime + 1).toISOString();
-                }
-              }
-              const nextStore = mergeCmsStores(incoming, baseServerStore);
-              const saved = writeServerCanvasCmsStore(nextStore);
+              incoming.updatedAt = new Date().toISOString();
+              const saved = writeServerCanvasCmsStore(incoming);
               void writeSupabaseCanvasCmsStore(saved);
               return Response.json(buildResolvedCanvasItemsFromStore(saved));
             }

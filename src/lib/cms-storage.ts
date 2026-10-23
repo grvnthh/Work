@@ -507,7 +507,7 @@ function findDistinctRandomCanvasPosition(
  * and persisting any nudged positions into `store.addedItems` and `store.overrides`
  * so the CMS grid coordinates and Canvas coordinates are 100% identical.
  */
-function settleStoreNonOverlappingPositions(
+export function settleStoreNonOverlappingPositions(
   store: CanvasCmsStoreData,
   priorityIds: string[] = [],
 ): void {
@@ -573,8 +573,10 @@ export function buildResolvedCanvasItemsFromStore(
     resolvedAdded.push(merged);
   }
 
+  const nonOverlappingItems = resolveNonOverlappingProjects(resolvedAdded, undefined, 64);
+
   return {
-    items: resolvedAdded,
+    items: nonOverlappingItems,
     deletedDefaultCount: 0,
     updatedAt: store.updatedAt,
     lastFocusedId: store.lastFocusedId,
@@ -1567,9 +1569,13 @@ export function pushStoreToServer(store: CanvasCmsStoreData, forceReplace = fals
             }),
           });
           if (res.ok && typeof window !== "undefined") {
+            const data = (await res.json().catch(() => null)) as ResolvedCanvasCmsState | null;
+            if (data?.store) {
+              persistStoreLocally(data.store);
+            }
             window.dispatchEvent(
               new CustomEvent("canvas-cms-server-synced", {
-                detail: buildResolvedCanvasItemsFromStore(snapshot),
+                detail: data ?? buildResolvedCanvasItemsFromStore(snapshot),
               }),
             );
           }
@@ -1629,16 +1635,7 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
 
   const versionBeforeFetch = mutationVersion;
 
-  const [serverStore, idbBackupStore] = await Promise.all([
-    fetchServerCmsStoreWithTimeout(3500),
-    readIdbStoreBackup(),
-  ]);
-
-  let cloudStore: CanvasCmsStoreData | null = null;
-  const serverTime = new Date(serverStore?.updatedAt || 0).getTime();
-  if (serverTime <= 0) {
-    cloudStore = await readCloudCmsStoreSnapshot();
-  }
+  const serverStore = await fetchServerCmsStoreWithTimeout(3500);
 
   if (mutationVersion !== versionBeforeFetch) {
     const current = readLocalCmsStore();
@@ -1646,22 +1643,59 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
     return buildResolvedCanvasItemsFromStore(current);
   }
 
-  let chosenStore = readLocalCmsStore();
+  const localStore = readLocalCmsStore();
+  const localTime = new Date(localStore.updatedAt || 0).getTime();
+  const serverTime = new Date(serverStore?.updatedAt || 0).getTime();
 
-  if (idbBackupStore) {
-    chosenStore = mergeCmsStores(chosenStore, idbBackupStore);
-  }
-  if (serverStore) {
-    chosenStore = mergeCmsStores(chosenStore, serverStore);
-  }
-  if (cloudStore) {
-    chosenStore = mergeCmsStores(chosenStore, cloudStore);
-  }
+  let chosenStore: CanvasCmsStoreData;
 
-  // If all stores are still uninitialized (epoch 0), check if IndexedDB has orphaned cms-* media blobs
-  const recovery = await recoverOrphanedIdbMediaIfStoreEmpty(chosenStore);
-  if (recovery.recovered) {
-    chosenStore = recovery.store;
+  if (
+    serverStore &&
+    (serverStore.addedItems.length > 0 || serverStore.deletedIds.length > 0 || serverTime > 0)
+  ) {
+    // If the server has a valid store, adopt it if serverTime >= localTime or local is empty
+    if (
+      serverTime >= localTime ||
+      (localStore.addedItems.length === 0 && localStore.deletedIds.length === 0)
+    ) {
+      chosenStore = serverStore;
+      persistStoreLocally(chosenStore);
+    } else {
+      chosenStore = localStore;
+      void pushStoreToServer(chosenStore, true);
+    }
+  } else if (
+    localTime > 0 &&
+    (localStore.addedItems.length > 0 || localStore.deletedIds.length > 0)
+  ) {
+    chosenStore = localStore;
+    void pushStoreToServer(chosenStore, true);
+  } else {
+    // Cold start fallback when server and local are both empty
+    const idbBackupStore = await readIdbStoreBackup();
+    const idbTime = new Date(idbBackupStore?.updatedAt || 0).getTime();
+    if (
+      idbBackupStore &&
+      (idbBackupStore.addedItems.length > 0 || idbBackupStore.deletedIds.length > 0 || idbTime > 0)
+    ) {
+      chosenStore = idbBackupStore;
+      persistStoreLocally(chosenStore);
+      void pushStoreToServer(chosenStore, true);
+    } else {
+      const cloudStore = await readCloudCmsStoreSnapshot();
+      if (cloudStore) {
+        chosenStore = cloudStore;
+        persistStoreLocally(chosenStore);
+        void pushStoreToServer(chosenStore, true);
+      } else {
+        const recovery = await recoverOrphanedIdbMediaIfStoreEmpty(localStore);
+        chosenStore = recovery.store;
+        if (recovery.recovered) {
+          persistStoreLocally(chosenStore);
+          void pushStoreToServer(chosenStore, true);
+        }
+      }
+    }
   }
 
   if (mutationVersion !== versionBeforeFetch) {
@@ -1671,14 +1705,6 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
   }
 
   registerStoreKnownCloudUrls(chosenStore);
-  persistStoreLocally(chosenStore);
-
-  const chosenTime = new Date(chosenStore.updatedAt || 0).getTime();
-  if (chosenTime > 0 && (recovery.recovered || chosenTime > serverTime)) {
-    void pushStoreToServer(chosenStore, true);
-  }
-
-  // Heal any remaining local= URLs sequentially 1-at-a-time in the background without blocking UI or bumping updatedAt
   scheduleBackgroundMediaHealing(chosenStore);
 
   return buildResolvedCanvasItemsFromStore(chosenStore);

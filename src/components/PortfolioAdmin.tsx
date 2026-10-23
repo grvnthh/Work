@@ -736,7 +736,7 @@ export function PortfolioAdmin({
                     )}
 
                     {/* Top-Left Media Badge */}
-                    <div className="absolute left-3 top-3 flex items-center gap-1.5">
+                    <div className="absolute left-3 top-3 z-10 flex max-w-[calc(100%-3.5rem)] flex-wrap items-center gap-1.5">
                       <span className="liquid-glass inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[0.6rem] uppercase tracking-wider text-foreground">
                         {isVideo ? (
                           <>

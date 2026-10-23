@@ -39,6 +39,7 @@ import {
   CANVAS_DIMENSIONS,
   computeAspectDimensions,
   expandCanvasProjects,
+  resolveNonOverlappingProjects,
   type PortfolioCanvasProject,
 } from "@/data/portfolioProjects";
 import {
@@ -230,7 +231,7 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
         )}
 
         {/* Subtle Video Sound Hint Pill on Top-Right */}
-        {isVideo && (
+        {isVideo && !embeddedPreview && (
           <div className="pointer-events-none absolute right-3 top-3 z-20">
             <div className="liquid-glass inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.62rem] font-medium tracking-wider text-foreground opacity-85 transition-opacity group-hover:opacity-100">
               <Volume2 className="h-3 w-3 text-foreground/90" />
@@ -456,18 +457,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
 
   const allProjects = useMemo(() => {
     const expanded = expandCanvasProjects(cmsItems);
-    if (Object.keys(measuredDimensions).length === 0) {
-      return expanded;
-    }
-    return expanded.map((project) => {
-      const override = measuredDimensions[project.id];
-      if (!override) return project;
-      return {
-        ...project,
-        width: override.width,
-        height: override.height,
-      };
-    });
+    return resolveNonOverlappingProjects(expanded, measuredDimensions, 64);
   }, [cmsItems, measuredDimensions]);
 
   const allProjectsRef = useRef<PortfolioCanvasProject[]>(allProjects);
