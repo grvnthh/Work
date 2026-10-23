@@ -89,13 +89,11 @@ export function PortfolioAdmin({
       setItems(res.items);
       setCanUndo(canUndoCmsAction());
       onItemsChange?.(res.items);
-      if (focusedId) {
-        isInternalSyncRef.current = true;
-        try {
-          broadcastCanvasCmsUpdate(res.items, focusedId);
-        } finally {
-          isInternalSyncRef.current = false;
-        }
+      isInternalSyncRef.current = true;
+      try {
+        broadcastCanvasCmsUpdate(res.items, focusedId);
+      } finally {
+        isInternalSyncRef.current = false;
       }
     },
     [onItemsChange],
@@ -159,6 +157,65 @@ export function PortfolioAdmin({
       window.removeEventListener("storage", onExternalUpdate);
     };
   }, [loadState, navigate]);
+
+  // Live cross-tab, cross-device background sync for CMS dashboard
+  useEffect(() => {
+    let active = true;
+
+    const syncFromServer = () => {
+      if (isInternalSyncRef.current || uploading) return;
+      void loadSynchronizedCmsState()
+        .then((res) => {
+          if (!active || !res?.items) return;
+          setItems((prev) => {
+            const prevSig = prev
+              .map((p) => `${p.id}@${p.canvasX},${p.canvasY},${p.title},${p.imageUrl}`)
+              .join("|");
+            const nextSig = res.items
+              .map((p) => `${p.id}@${p.canvasX},${p.canvasY},${p.title},${p.imageUrl}`)
+              .join("|");
+            return prevSig !== nextSig ? res.items : prev;
+          });
+          setCanUndo(canUndoCmsAction());
+          onItemsChange?.(res.items);
+        })
+        .catch(() => {});
+    };
+
+    const onVisibilityOrFocus = () => {
+      if (document.visibilityState === "visible") {
+        syncFromServer();
+      }
+    };
+
+    const onServerSynced = (e: Event) => {
+      if (isInternalSyncRef.current) return;
+      const custom = e as CustomEvent<{ items?: PortfolioCanvasProject[] }>;
+      if (Array.isArray(custom.detail?.items)) {
+        setItems(custom.detail.items);
+        setCanUndo(canUndoCmsAction());
+        onItemsChange?.(custom.detail.items);
+      }
+    };
+
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
+    window.addEventListener("canvas-cms-server-synced", onServerSynced);
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        syncFromServer();
+      }
+    }, 2500);
+
+    return () => {
+      active = false;
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
+      window.removeEventListener("canvas-cms-server-synced", onServerSynced);
+      window.clearInterval(intervalId);
+    };
+  }, [onItemsChange, uploading]);
 
   // Close confirmation modal on Escape key
   useEffect(() => {

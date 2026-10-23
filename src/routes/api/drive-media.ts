@@ -151,9 +151,18 @@ async function getSupabaseStorageSignedUrl(
   return null;
 }
 
+function extractSnapshotTimestamp(name: string): number {
+  const match = name.match(/cms-canvas-store-v\d+-0*(\d+)/);
+  if (match?.[1]) {
+    const parsed = parseInt(match[1], 10);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
 async function listServerSupabaseSnapshots(
   prefixSearch: string,
-  limit = 8,
+  limit = 16,
 ): Promise<Array<{ name: string }>> {
   const { url, key } = getServerSupabaseCredentials();
   try {
@@ -171,7 +180,11 @@ async function listServerSupabaseSnapshots(
     if (!res.ok) return [];
     const data = (await res.json().catch(() => null)) as Array<{ name?: string }> | null;
     if (!Array.isArray(data)) return [];
-    return data.filter((item): item is { name: string } => typeof item?.name === "string");
+    const filtered = data.filter(
+      (item): item is { name: string } => typeof item?.name === "string",
+    );
+    filtered.sort((a, b) => extractSnapshotTimestamp(b.name) - extractSnapshotTimestamp(a.name));
+    return filtered;
   } catch {
     return [];
   }
@@ -195,12 +208,12 @@ async function downloadServerSupabaseText(storagePath: string): Promise<string |
 async function readSupabaseCanvasCmsStore(forceFresh = false): Promise<CanvasCmsStoreData | null> {
   const now = Date.now();
   const cached = globalState.__GRVNTH_CLOUD_STORE_CACHE__;
-  if (!forceFresh && cached && now - cached.fetchedAt < 8000) {
+  if (!forceFresh && cached && now - cached.fetchedAt < 2000) {
     return cached.store;
   }
 
   try {
-    const v5Files = await listServerSupabaseSnapshots(CMS_SNAPSHOT_PREFIX, 6);
+    const v5Files = await listServerSupabaseSnapshots(CMS_SNAPSHOT_PREFIX, 16);
     for (const file of v5Files) {
       const text = await downloadServerSupabaseText(`inquiries/${file.name}`);
       if (!text) continue;
@@ -215,7 +228,7 @@ async function readSupabaseCanvasCmsStore(forceFresh = false): Promise<CanvasCms
       }
     }
 
-    const v4Files = await listServerSupabaseSnapshots(LEGACY_SNAPSHOT_PREFIX, 6);
+    const v4Files = await listServerSupabaseSnapshots(LEGACY_SNAPSHOT_PREFIX, 10);
     for (const file of v4Files) {
       const text = await downloadServerSupabaseText(`inquiries/${file.name}`);
       if (!text) continue;
@@ -625,12 +638,18 @@ export const Route = createFileRoute("/api/drive-media")({
         if (url.searchParams.get("cmsState") === "1") {
           let store = readServerCanvasCmsStore();
           const cloudStore = await readSupabaseCanvasCmsStore();
-          if (
-            cloudStore &&
-            (cloudStore.addedItems.length > 0 || cloudStore.deletedIds.length > 0)
-          ) {
-            store = mergeCmsStores(store, cloudStore);
-            writeServerCanvasCmsStore(store);
+          if (cloudStore) {
+            const diskTime = new Date(store.updatedAt || 0).getTime();
+            const cloudTime = new Date(cloudStore.updatedAt || 0).getTime();
+            if (cloudTime > diskTime) {
+              store = mergeCmsStores(store, cloudStore);
+              writeServerCanvasCmsStore(store);
+            } else if (
+              diskTime > cloudTime &&
+              (store.addedItems.length > 0 || store.deletedIds.length > 0)
+            ) {
+              void writeSupabaseCanvasCmsStore(store);
+            }
           }
           const resolved = buildResolvedCanvasItemsFromStore(store);
           return Response.json(resolved);
@@ -857,9 +876,9 @@ export const Route = createFileRoute("/api/drive-media")({
 
             if (body?.store) {
               const incoming = normalizeStore(body.store);
-              incoming.updatedAt = new Date().toISOString();
+              incoming.updatedAt = body.store.updatedAt || new Date().toISOString();
               const saved = writeServerCanvasCmsStore(incoming);
-              void writeSupabaseCanvasCmsStore(saved);
+              await writeSupabaseCanvasCmsStore(saved);
               return Response.json(buildResolvedCanvasItemsFromStore(saved));
             }
             const current = readServerCanvasCmsStore();

@@ -1,58 +1,6 @@
 {
   "addedItems": [
     {
-      "id": "item-1792687106097-f98z9",
-      "title": "Edit 24",
-      "description": "",
-      "year": "2026",
-      "mediaType": "video",
-      "imageUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792687101248-7drw-edit-24.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjY4NzEwMTI0OC03ZHJ3LWVkaXQtMjQubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5MjcyMDQwMiwiZXhwIjoyMTA4MDgwNDAyfQ.XOQH0YyNE-lZOIqaZatiPgAUzn19OrjuA0qeI21Lv9AYiroDL-hL4-_9aSzZCjaRaW-wd1lFyOB_yWtxHCJJtg",
-      "videoUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792687101248-7drw-edit-24.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjY4NzEwMTI0OC03ZHJ3LWVkaXQtMjQubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5MjcyMDQwMiwiZXhwIjoyMTA4MDgwNDAyfQ.XOQH0YyNE-lZOIqaZatiPgAUzn19OrjuA0qeI21Lv9AYiroDL-hL4-_9aSzZCjaRaW-wd1lFyOB_yWtxHCJJtg",
-      "canvasX": 1829,
-      "canvasY": 1091,
-      "width": 232,
-      "height": 413
-    },
-    {
-      "id": "item-1792686980586-tncam",
-      "title": "Edit 18",
-      "description": "",
-      "year": "2026",
-      "mediaType": "video",
-      "imageUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792686976136-ek5u-edit-18.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjY4Njk3NjEzNi1lazV1LWVkaXQtMTgubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5MjcyMDQwMywiZXhwIjoyMTA4MDgwNDAzfQ.ub_m9q0uo5WwEpKzL9f-H-dWiro85AdG8wu2gvTHZh2enI4zN6F9PV2vsN-Fl6dymrzkSYrtRkUMBaWzT0iG6g",
-      "videoUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792686976136-ek5u-edit-18.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjY4Njk3NjEzNi1lazV1LWVkaXQtMTgubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5MjcyMDQwMywiZXhwIjoyMTA4MDgwNDAzfQ.ub_m9q0uo5WwEpKzL9f-H-dWiro85AdG8wu2gvTHZh2enI4zN6F9PV2vsN-Fl6dymrzkSYrtRkUMBaWzT0iG6g",
-      "canvasX": 2139,
-      "canvasY": 852,
-      "width": 233,
-      "height": 414
-    },
-    {
-      "id": "item-1792686851422-5kxtr",
-      "title": "Edit 15",
-      "description": "",
-      "year": "2026",
-      "mediaType": "video",
-      "imageUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792686849642-1o6g-edit-15.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjY4Njg0OTY0Mi0xbzZnLWVkaXQtMTUubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5MjcyMDQwNCwiZXhwIjoyMTA4MDgwNDA0fQ.NbAQJ9oVsZzXRSeFtn59RBxs7KXcyZkVC5WB3HJZXnsmnE63d1E9Fnrl0-w4vsCT4a1bPd8flcBG_6F6A2aiZw",
-      "videoUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792686849642-1o6g-edit-15.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjY4Njg0OTY0Mi0xbzZnLWVkaXQtMTUubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5MjcyMDQwNCwiZXhwIjoyMTA4MDgwNDA0fQ.NbAQJ9oVsZzXRSeFtn59RBxs7KXcyZkVC5WB3HJZXnsmnE63d1E9Fnrl0-w4vsCT4a1bPd8flcBG_6F6A2aiZw",
-      "canvasX": 1526,
-      "canvasY": 905,
-      "width": 233,
-      "height": 414
-    },
-    {
-      "id": "item-1792686731444-nninx",
-      "title": "Edit 1",
-      "description": "",
-      "year": "2026",
-      "mediaType": "video",
-      "imageUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792686730551-qskw-edit-1.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjY4NjczMDU1MS1xc2t3LWVkaXQtMS5tcDQiLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzkyNzIwNDA1LCJleHAiOjIxMDgwODA0MDV9.42wZxQ1UOmwpMEUsKu34uer_IUpQa9lb5z9uKpo9TQctYZfltP5xYTU4uAyEhRYTj6DTK5lE1NP00LOTA6qAhQ",
-      "videoUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792686730551-qskw-edit-1.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjY4NjczMDU1MS1xc2t3LWVkaXQtMS5tcDQiLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzkyNzIwNDA1LCJleHAiOjIxMDgwODA0MDV9.42wZxQ1UOmwpMEUsKu34uer_IUpQa9lb5z9uKpo9TQctYZfltP5xYTU4uAyEhRYTj6DTK5lE1NP00LOTA6qAhQ",
-      "canvasX": 1771,
-      "canvasY": 550,
-      "width": 413,
-      "height": 232
-    },
-    {
       "id": "item-1792686624293-ydl94",
       "title": "Reel Cover 1",
       "description": "",
@@ -545,6 +493,58 @@
       "canvasY": 2822,
       "width": 413,
       "height": 232
+    },
+    {
+      "id": "item-1792733825080-sj4tu",
+      "title": "Edit 24",
+      "description": "",
+      "year": "2026",
+      "mediaType": "video",
+      "imageUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792733819881-ebkb-edit-24.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjczMzgxOTg4MS1lYmtiLWVkaXQtMjQubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5Mjc0NzAxOSwiZXhwIjoyMTA4MTA3MDE5fQ.zC5OmA0f0O_43VazuSt0k4gWYzfTJ5Q84xuzhHT6yYZ_1uyX0dxQynV3XzW_vvWYIFC5YY9891j9yumMmtAjiw",
+      "videoUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792733819881-ebkb-edit-24.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjczMzgxOTg4MS1lYmtiLWVkaXQtMjQubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5Mjc0NzAxOSwiZXhwIjoyMTA4MTA3MDE5fQ.zC5OmA0f0O_43VazuSt0k4gWYzfTJ5Q84xuzhHT6yYZ_1uyX0dxQynV3XzW_vvWYIFC5YY9891j9yumMmtAjiw",
+      "canvasX": 2449,
+      "canvasY": 800,
+      "width": 232,
+      "height": 413
+    },
+    {
+      "id": "item-1792733825079-0ze41",
+      "title": "Edit 15",
+      "description": "",
+      "year": "2026",
+      "mediaType": "video",
+      "imageUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792733818748-a6cm-edit-15.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjczMzgxODc0OC1hNmNtLWVkaXQtMTUubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5Mjc0NzAyMiwiZXhwIjoyMTA4MTA3MDIyfQ.k3KUYPi4e-nSCE7YE_BfswBhaZY7nluVvFZ8wGGy6w47YFqpBrzcD7FAXjP30ZLxsLivRnIiFVLpdpRgrl7x_w",
+      "videoUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792733818748-a6cm-edit-15.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjczMzgxODc0OC1hNmNtLWVkaXQtMTUubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5Mjc0NzAyMiwiZXhwIjoyMTA4MTA3MDIyfQ.k3KUYPi4e-nSCE7YE_BfswBhaZY7nluVvFZ8wGGy6w47YFqpBrzcD7FAXjP30ZLxsLivRnIiFVLpdpRgrl7x_w",
+      "canvasX": 3648,
+      "canvasY": 1588,
+      "width": 233,
+      "height": 414
+    },
+    {
+      "id": "item-1792733670491-3ymei",
+      "title": "Edit 1",
+      "description": "",
+      "year": "2026",
+      "mediaType": "video",
+      "imageUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792733669720-lhre-edit-1.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjczMzY2OTcyMC1saHJlLWVkaXQtMS5tcDQiLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzkyNzQ3MDI0LCJleHAiOjIxMDgxMDcwMjR9.QP3Qfng_Rts6hR1Vx9IufpJAjzl_a58idSpw4NMnMUZJGc6j99m2pbyp72nHdjEaeVENjKPD2j1sCog0bqXQAA",
+      "videoUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792733669720-lhre-edit-1.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjczMzY2OTcyMC1saHJlLWVkaXQtMS5tcDQiLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzkyNzQ3MDI0LCJleHAiOjIxMDgxMDcwMjR9.QP3Qfng_Rts6hR1Vx9IufpJAjzl_a58idSpw4NMnMUZJGc6j99m2pbyp72nHdjEaeVENjKPD2j1sCog0bqXQAA",
+      "canvasX": 3416,
+      "canvasY": 2134,
+      "width": 413,
+      "height": 232
+    },
+    {
+      "id": "item-1792733670484-q95bm",
+      "title": "Edit 18",
+      "description": "",
+      "year": "2026",
+      "mediaType": "video",
+      "imageUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792733667807-u7ag-edit-18.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjczMzY2NzgwNy11N2FnLWVkaXQtMTgubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5Mjc0NzAyNywiZXhwIjoyMTA4MTA3MDI3fQ.Obuq3eFUAUSvy7ooUUhWALfSny5yZpXJgMwbjPVLIvuEnsooCN9MwpdrHeYqTADa7X8DpBtXmA5LoucRVzjb9g",
+      "videoUrl": "https://jnolhqtsuyfckytngssa.supabase.co/storage/v1/object/sign/contact-attachments/inquiries/cms-1792733667807-u7ag-edit-18.mp4?token=eyJraWQiOiIzZDhmODFiZi1hZDA3LTQ3MTAtYjBmYi05YWNmNjNkYzUxMjkiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJjb250YWN0LWF0dGFjaG1lbnRzL2lucXVpcmllcy9jbXMtMTc5MjczMzY2NzgwNy11N2FnLWVkaXQtMTgubXA0Iiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc5Mjc0NzAyNywiZXhwIjoyMTA4MTA3MDI3fQ.Obuq3eFUAUSvy7ooUUhWALfSny5yZpXJgMwbjPVLIvuEnsooCN9MwpdrHeYqTADa7X8DpBtXmA5LoucRVzjb9g",
+      "canvasX": 435,
+      "canvasY": 2140,
+      "width": 233,
+      "height": 414
     }
   ],
   "deletedIds": [
@@ -574,7 +574,11 @@
     "leader-lessons-thumbnail",
     "remote-hiring-flyer",
     "make-the-vibes-graphic",
-    "item-1792666482931-pqy4w"
+    "item-1792666482931-pqy4w",
+    "item-1792687106097-f98z9",
+    "item-1792686980586-tncam",
+    "item-1792686851422-5kxtr",
+    "item-1792686731444-nninx"
   ],
   "overrides": {
     "item-1792662167813-vqtwh": {
@@ -583,5 +587,6 @@
       "year": "2026"
     }
   },
-  "updatedAt": "2026-10-23T03:21:23.572Z"
+  "updatedAt": "2026-10-23T09:11:59.166Z",
+  "lastFocusedId": "item-1792733825079-0ze41"
 }

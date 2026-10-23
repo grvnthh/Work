@@ -157,9 +157,18 @@ async function createSupabaseSignedUrlRest(
   return null;
 }
 
+function extractSnapshotTimestamp(name: string): number {
+  const match = name.match(/cms-canvas-store-v\d+-0*(\d+)/);
+  if (match?.[1]) {
+    const parsed = parseInt(match[1], 10);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
 async function listSupabaseSnapshotsRest(
   prefixSearch: string,
-  limit = 8,
+  limit = 16,
 ): Promise<Array<{ name: string }>> {
   const { url, key } = getSupabaseRestConfig();
   try {
@@ -180,7 +189,11 @@ async function listSupabaseSnapshotsRest(
     if (!res.ok) return [];
     const data = (await res.json().catch(() => null)) as Array<{ name?: string }> | null;
     if (!Array.isArray(data)) return [];
-    return data.filter((item): item is { name: string } => typeof item?.name === "string");
+    const filtered = data.filter(
+      (item): item is { name: string } => typeof item?.name === "string",
+    );
+    filtered.sort((a, b) => extractSnapshotTimestamp(b.name) - extractSnapshotTimestamp(a.name));
+    return filtered;
   } catch {
     return [];
   }
@@ -1507,7 +1520,7 @@ export function mergeCmsStores(
 
 async function readCloudCmsStoreSnapshot(): Promise<CanvasCmsStoreData | null> {
   try {
-    const v5Files = await listSupabaseSnapshotsRest(CMS_SNAPSHOT_PREFIX, 6);
+    const v5Files = await listSupabaseSnapshotsRest(CMS_SNAPSHOT_PREFIX, 16);
     for (const file of v5Files) {
       const text = await downloadSupabaseObjectTextRest(`inquiries/${file.name}`);
       if (!text) continue;
@@ -1669,32 +1682,38 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
   );
 
   if (hasServerItems && hasLocalItems && serverStore) {
-    chosenStore = mergeCmsStores(localStore, serverStore);
-    persistStoreLocally(chosenStore);
-    if (chosenStore.addedItems.length > serverStore.addedItems.length) {
+    if (serverTime >= localTime) {
+      chosenStore = mergeCmsStores(localStore, serverStore);
+    } else {
+      chosenStore = mergeCmsStores(serverStore, localStore);
       void pushStoreToServer(chosenStore, true);
     }
+    persistStoreLocally(chosenStore);
   } else if (hasServerItems && serverStore) {
     chosenStore = serverStore;
     persistStoreLocally(chosenStore);
   } else if (hasLocalItems) {
     chosenStore = localStore;
-    void pushStoreToServer(chosenStore, true);
+    if (serverStore !== null) {
+      void pushStoreToServer(chosenStore, true);
+    }
   } else {
     // Cold start fallback when server and local are both empty
-    const idbBackupStore = await readIdbStoreBackup();
-    const idbTime = new Date(idbBackupStore?.updatedAt || 0).getTime();
-    if (
-      idbBackupStore &&
-      (idbBackupStore.addedItems.length > 0 || idbBackupStore.deletedIds.length > 0 || idbTime > 0)
-    ) {
-      chosenStore = idbBackupStore;
+    const cloudStore = await readCloudCmsStoreSnapshot();
+    if (cloudStore && (cloudStore.addedItems.length > 0 || cloudStore.deletedIds.length > 0)) {
+      chosenStore = cloudStore;
       persistStoreLocally(chosenStore);
       void pushStoreToServer(chosenStore, true);
     } else {
-      const cloudStore = await readCloudCmsStoreSnapshot();
-      if (cloudStore) {
-        chosenStore = cloudStore;
+      const idbBackupStore = await readIdbStoreBackup();
+      const idbTime = new Date(idbBackupStore?.updatedAt || 0).getTime();
+      if (
+        idbBackupStore &&
+        (idbBackupStore.addedItems.length > 0 ||
+          idbBackupStore.deletedIds.length > 0 ||
+          idbTime > 0)
+      ) {
+        chosenStore = idbBackupStore;
         persistStoreLocally(chosenStore);
         void pushStoreToServer(chosenStore, true);
       } else {
