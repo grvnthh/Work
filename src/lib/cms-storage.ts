@@ -1444,7 +1444,15 @@ export function mergeCmsStores(
       }
     }
 
+    for (const item of older.addedItems) {
+      if (!deletedSet.has(item.id) && !seenIds.has(item.id)) {
+        seenIds.add(item.id);
+        mergedAddedItems.push(upgradeItemUrlIfAvailable(item));
+      }
+    }
+
     const mergedOverrides: Record<string, Partial<PortfolioCanvasProject>> = {
+      ...older.overrides,
       ...newer.overrides,
     };
     for (const delId of deletedSet) {
@@ -1458,7 +1466,9 @@ export function mergeCmsStores(
       updatedAt: new Date(newerTime).toISOString(),
       ...(newer.lastFocusedId && !deletedSet.has(newer.lastFocusedId)
         ? { lastFocusedId: newer.lastFocusedId }
-        : {}),
+        : older.lastFocusedId && !deletedSet.has(older.lastFocusedId)
+          ? { lastFocusedId: older.lastFocusedId }
+          : {}),
     };
   }
 
@@ -1649,25 +1659,25 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
 
   let chosenStore: CanvasCmsStoreData;
 
-  if (
+  const hasServerItems = Boolean(
     serverStore &&
-    (serverStore.addedItems.length > 0 || serverStore.deletedIds.length > 0 || serverTime > 0)
-  ) {
-    // If the server has a valid store, adopt it if serverTime >= localTime or local is empty
-    if (
-      serverTime >= localTime ||
-      (localStore.addedItems.length === 0 && localStore.deletedIds.length === 0)
-    ) {
-      chosenStore = serverStore;
-      persistStoreLocally(chosenStore);
-    } else {
-      chosenStore = localStore;
+    (serverStore.addedItems.length > 0 || serverStore.deletedIds.length > 0 || serverTime > 0),
+  );
+  const hasLocalItems = Boolean(
+    localStore &&
+    (localStore.addedItems.length > 0 || localStore.deletedIds.length > 0 || localTime > 0),
+  );
+
+  if (hasServerItems && hasLocalItems && serverStore) {
+    chosenStore = mergeCmsStores(localStore, serverStore);
+    persistStoreLocally(chosenStore);
+    if (chosenStore.addedItems.length > serverStore.addedItems.length) {
       void pushStoreToServer(chosenStore, true);
     }
-  } else if (
-    localTime > 0 &&
-    (localStore.addedItems.length > 0 || localStore.deletedIds.length > 0)
-  ) {
+  } else if (hasServerItems && serverStore) {
+    chosenStore = serverStore;
+    persistStoreLocally(chosenStore);
+  } else if (hasLocalItems) {
     chosenStore = localStore;
     void pushStoreToServer(chosenStore, true);
   } else {

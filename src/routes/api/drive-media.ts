@@ -624,16 +624,13 @@ export const Route = createFileRoute("/api/drive-media")({
 
         if (url.searchParams.get("cmsState") === "1") {
           let store = readServerCanvasCmsStore();
-          const storeTime = new Date(store.updatedAt || 0).getTime();
-          // Only pull from Supabase Storage if the server has never had any items initialized (cold start recovery)
-          if (storeTime <= 0 && store.addedItems.length === 0 && store.deletedIds.length === 0) {
-            const cloudStore = await readSupabaseCanvasCmsStore();
-            if (
-              cloudStore &&
-              (cloudStore.addedItems.length > 0 || cloudStore.deletedIds.length > 0)
-            ) {
-              store = writeServerCanvasCmsStore(cloudStore);
-            }
+          const cloudStore = await readSupabaseCanvasCmsStore();
+          if (
+            cloudStore &&
+            (cloudStore.addedItems.length > 0 || cloudStore.deletedIds.length > 0)
+          ) {
+            store = mergeCmsStores(store, cloudStore);
+            writeServerCanvasCmsStore(store);
           }
           const resolved = buildResolvedCanvasItemsFromStore(store);
           return Response.json(resolved);

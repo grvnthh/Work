@@ -742,15 +742,8 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
 
     const applyIncomingItemsAndCenterIfNeeded = (nextItems: PortfolioCanvasProject[]) => {
       const nextLayoutSig = computeLayoutSignature(nextItems);
-      const layoutChanged = nextLayoutSig !== lastLayoutSignatureRef.current;
       lastLayoutSignatureRef.current = nextLayoutSig;
       updateCmsItemsIfChanged(nextItems);
-      if (layoutChanged && nextItems.length > 0 && camRef.current.mode !== "dragging") {
-        window.setTimeout(() => {
-          if (!active || camRef.current.mode === "dragging") return;
-          centerOnBestTarget(420);
-        }, 40);
-      }
     };
 
     const syncFromServer = () => {
@@ -1620,7 +1613,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
             data-lenis-prevent
             role="dialog"
             aria-modal="true"
-            aria-label={selectedProject.title}
+            aria-label="Media preview"
             onClick={closeProjectModal}
             className="fixed inset-0 z-[9999] flex flex-col bg-neutral-950/96"
           >
@@ -1629,19 +1622,15 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
               onClick={(e) => e.stopPropagation()}
               className="relative z-30 flex items-center justify-between gap-3 px-4 py-4 sm:px-6"
             >
-              <div className="liquid-glass inline-flex min-w-0 items-center gap-2.5 rounded-full px-4 py-2 text-xs text-foreground/90">
-                <span className="max-w-[180px] truncate font-medium sm:max-w-md">
-                  {selectedProject.title}
-                </span>
-                {!selectedModalVideoUrl && (
-                  <>
-                    <span aria-hidden="true" className="hidden text-muted-foreground sm:inline">
-                      ·
-                    </span>
-                    <span className="hidden text-[0.68rem] text-muted-foreground sm:inline">
-                      Scroll or double-click to zoom · Drag to pan
-                    </span>
-                  </>
+              <div className="liquid-glass inline-flex min-w-0 items-center gap-2 rounded-full px-4 py-2 text-xs text-foreground/90">
+                {selectedModalVideoUrl ? (
+                  <span className="text-[0.72rem] font-medium text-foreground/90">
+                    Video Preview
+                  </span>
+                ) : (
+                  <span className="text-[0.72rem] text-foreground/90">
+                    Scroll or double-click to zoom · Drag to pan
+                  </span>
                 )}
               </div>
 
