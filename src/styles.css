@@ -128,7 +128,12 @@
 /* Restrained Liquid Glass UI surfaces with specular edge highlights and fallback */
 @utility liquid-glass {
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.06) 100%),
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.11) 0%,
+      rgba(255, 255, 255, 0.03) 55%,
+      rgba(255, 255, 255, 0.06) 100%
+    ),
     rgba(12, 12, 14, 0.76);
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow:
@@ -137,23 +142,42 @@
     0 18px 42px -14px rgba(0, 0, 0, 0.75);
   @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
     background:
-      linear-gradient(145deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.07) 100%),
+      linear-gradient(
+        145deg,
+        rgba(255, 255, 255, 0.12) 0%,
+        rgba(255, 255, 255, 0.03) 55%,
+        rgba(255, 255, 255, 0.07) 100%
+      ),
       rgba(10, 10, 12, 0.62);
     backdrop-filter: blur(14px) saturate(140%);
     -webkit-backdrop-filter: blur(14px) saturate(140%);
   }
 }
 
-/* Inside the hardware-transformed infinite canvas, avoid per-card 3D layer promotion and backdrop-filter re-sampling on pan/zoom frames */
+/* Inside the hardware-transformed infinite canvas, isolate layout and paint per card */
 .canvas-card-surface {
-  transform: none;
+  transform: translateZ(0);
+  contain: layout paint;
+  will-change: auto;
+}
+
+.canvas-card-surface video,
+.canvas-card-surface img {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 .canvas-card-surface .liquid-glass {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.05) 55%, rgba(255, 255, 255, 0.08) 100%),
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.14) 0%,
+      rgba(255, 255, 255, 0.05) 55%,
+      rgba(255, 255, 255, 0.08) 100%
+    ),
     rgba(10, 10, 12, 0.84);
 }
 

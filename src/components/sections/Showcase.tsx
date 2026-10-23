@@ -32,6 +32,7 @@ import {
   InteractiveVideo,
   isVideoSource,
   MediaImage,
+  setCanvasVideosSuspended,
   SilentAutoPlayVideo,
 } from "@/components/MediaImage";
 import { Reveal } from "@/components/Reveal";
@@ -99,6 +100,7 @@ interface CanvasProjectCardProps {
   project: PortfolioCanvasProject;
   isHighlighted: boolean;
   embeddedPreview: boolean;
+  isModalOpen?: boolean;
   onCardClick: (project: PortfolioCanvasProject) => void;
   onCardKeyDown: (event: ReactKeyboardEvent<HTMLElement>, project: PortfolioCanvasProject) => void;
   onRegisterAspect: (projectId: string, naturalWidth: number, naturalHeight: number) => void;
@@ -110,6 +112,7 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
   project,
   isHighlighted,
   embeddedPreview,
+  isModalOpen = false,
   onCardClick,
   onCardKeyDown,
   onRegisterAspect,
@@ -164,7 +167,8 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
             alt={project.title}
             width={project.width}
             height={project.height}
-            preload="metadata"
+            preload="none"
+            pausedPreview={isModalOpen}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}
             onLoadedMetadata={(e) => {
@@ -378,6 +382,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
 
       if (cam.mode === "dragging") {
         applyCameraTransform(cam.x, cam.y, cam.scale);
+        cam.rafId = requestAnimationFrame(tick);
         return;
       }
 
@@ -932,62 +937,67 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
   }, [startCameraLoop]);
 
   // Pointer drag & multi-touch pinch-to-zoom handlers on viewport
-  const handleViewportPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 && event.pointerType === "mouse") return;
-    const targetEl = event.target as HTMLElement | null;
-    if (targetEl?.closest("button, a, input, [role='toolbar']")) return;
+  const handleViewportPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 && event.pointerType === "mouse") return;
+      const targetEl = event.target as HTMLElement | null;
+      if (targetEl?.closest("button, a, input, [role='toolbar']")) return;
 
-    const el = viewportRef.current;
-    if (!el) return;
+      const el = viewportRef.current;
+      if (!el) return;
 
-    // Prevent default browser drag and selection behaviors
-    event.preventDefault();
+      // Prevent default browser drag and selection behaviors
+      event.preventDefault();
 
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Ignore capture errors
-    }
-
-    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const cam = camRef.current;
-    cam.vx = 0;
-    cam.vy = 0;
-    cam.targetX = cam.x;
-    cam.targetY = cam.y;
-    cam.targetScale = cam.scale;
-    cam.mode = "dragging";
-
-    if (pointersRef.current.size === 1) {
-      suppressNextCardClickRef.current = false;
-      dragSessionRef.current = {
-        startX: event.clientX,
-        startY: event.clientY,
-        lastX: event.clientX,
-        lastY: event.clientY,
-        lastTime: performance.now(),
-        movedBeyondThreshold: false,
-        pinchDist: 0,
-        pinchMidX: 0,
-        pinchMidY: 0,
-      };
-      el.classList.remove("cursor-grab");
-      el.classList.add("cursor-grabbing");
-    } else if (pointersRef.current.size === 2) {
-      const pts = Array.from(pointersRef.current.values());
-      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      const midX = (pts[0].x + pts[1].x) / 2;
-      const midY = (pts[0].y + pts[1].y) / 2;
-      suppressNextCardClickRef.current = true;
-      el.classList.add("is-panning");
-      if (dragSessionRef.current) {
-        dragSessionRef.current.movedBeyondThreshold = true;
-        dragSessionRef.current.pinchDist = dist;
-        dragSessionRef.current.pinchMidX = midX;
-        dragSessionRef.current.pinchMidY = midY;
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignore capture errors
       }
-    }
-  }, []);
+
+      pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const cam = camRef.current;
+      cam.vx = 0;
+      cam.vy = 0;
+      cam.targetX = cam.x;
+      cam.targetY = cam.y;
+      cam.targetScale = cam.scale;
+      cam.mode = "dragging";
+      startCameraLoop();
+
+      if (pointersRef.current.size === 1) {
+        suppressNextCardClickRef.current = false;
+        dragSessionRef.current = {
+          startX: event.clientX,
+          startY: event.clientY,
+          lastX: event.clientX,
+          lastY: event.clientY,
+          lastTime: performance.now(),
+          movedBeyondThreshold: false,
+          pinchDist: 0,
+          pinchMidX: 0,
+          pinchMidY: 0,
+        };
+        el.classList.remove("cursor-grab");
+        el.classList.add("cursor-grabbing");
+      } else if (pointersRef.current.size === 2) {
+        const pts = Array.from(pointersRef.current.values());
+        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        const midX = (pts[0].x + pts[1].x) / 2;
+        const midY = (pts[0].y + pts[1].y) / 2;
+        suppressNextCardClickRef.current = true;
+        el.classList.add("is-panning");
+        setCanvasVideosSuspended(true);
+        if (dragSessionRef.current) {
+          dragSessionRef.current.movedBeyondThreshold = true;
+          dragSessionRef.current.pinchDist = dist;
+          dragSessionRef.current.pinchMidX = midX;
+          dragSessionRef.current.pinchMidY = midY;
+        }
+      }
+    },
+    [startCameraLoop],
+  );
 
   const handleViewportPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -995,6 +1005,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       if (event.pointerType === "mouse" && (event.buttons & 1) === 0) {
         pointersRef.current.delete(event.pointerId);
         dragSessionRef.current = null;
+        setCanvasVideosSuspended(false);
         const el = viewportRef.current;
         if (el) {
           el.classList.remove("cursor-grabbing", "is-panning");
@@ -1057,6 +1068,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
           session.movedBeyondThreshold = true;
           suppressNextCardClickRef.current = true;
           el.classList.add("is-panning");
+          setCanvasVideosSuspended(true);
         }
       }
 
@@ -1093,6 +1105,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       }
 
       if (pointersRef.current.size === 0) {
+        setCanvasVideosSuspended(false);
         if (el) {
           el.classList.remove("cursor-grabbing");
           el.classList.add("cursor-grab");
@@ -1132,6 +1145,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
     const handleGlobalRelease = () => {
       pointersRef.current.clear();
       dragSessionRef.current = null;
+      setCanvasVideosSuspended(false);
       const el = viewportRef.current;
       if (el) {
         el.classList.remove("cursor-grabbing", "is-panning");
@@ -1532,15 +1546,16 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
         </button>
       </div>
 
-      {/* Hardware-Accelerated Stage with explicit bounds so browser tile culling never clips or shutters cards when zoomed out */}
+      {/* Hardware-Accelerated Stage with zero base footprint so GPU never tiles or thrashes an enormous backing store */}
       <div
         ref={stageRef}
         style={{
           position: "absolute",
           left: 0,
           top: 0,
-          width: `${canvasBounds.width}px`,
-          height: `${canvasBounds.height}px`,
+          width: 0,
+          height: 0,
+          overflow: "visible",
           transformOrigin: "0 0",
           transform: `translate3d(${initialX}px, ${initialY}px, 0) scale(${initialScale})`,
           willChange: "transform",
@@ -1552,8 +1567,12 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
         <div
           aria-hidden="true"
           style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
             width: `${canvasBounds.width}px`,
             height: `${canvasBounds.height}px`,
+            pointerEvents: "none",
           }}
           className="pointer-events-none absolute left-0 top-0 border border-white/[0.04]"
         >
@@ -1574,6 +1593,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
             project={project}
             isHighlighted={highlightedId === project.id}
             embeddedPreview={embeddedPreview}
+            isModalOpen={Boolean(selectedProject)}
             onCardClick={handleCardClick}
             onCardKeyDown={handleCardKeyDown}
             onRegisterAspect={registerNaturalAspect}
@@ -1602,7 +1622,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
             aria-modal="true"
             aria-label={selectedProject.title}
             onClick={closeProjectModal}
-            className="fixed inset-0 z-[9999] flex flex-col bg-black/92 backdrop-blur-xl"
+            className="fixed inset-0 z-[9999] flex flex-col bg-neutral-950/96"
           >
             {/* Top Floating Bar */}
             <div
@@ -1701,6 +1721,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
               {selectedModalVideoUrl && !videoError ? (
                 <div
                   onClick={(e) => e.stopPropagation()}
+                  style={{ contain: "layout paint" }}
                   className="relative flex max-h-[78vh] max-w-[86vw] items-center justify-center"
                 >
                   <InteractiveVideo

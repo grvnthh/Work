@@ -43,7 +43,44 @@ const AVAILABLE_THUMB_FILES = new Set([
 let sharedVideoObserver: IntersectionObserver | null = null;
 const observedVideos = new WeakSet<HTMLVideoElement>();
 const activePlayingVideos = new Set<HTMLVideoElement>();
-const MAX_CONCURRENT_CANVAS_VIDEOS = 6;
+const MAX_CONCURRENT_CANVAS_VIDEOS = 2;
+let canvasVideosSuspended = false;
+
+export function setCanvasVideosSuspended(suspended: boolean): void {
+  if (canvasVideosSuspended === suspended) return;
+  canvasVideosSuspended = suspended;
+  if (suspended) {
+    for (const video of activePlayingVideos) {
+      if (!video.paused) {
+        video.pause();
+      }
+    }
+  } else {
+    let count = 0;
+    for (const video of Array.from(activePlayingVideos)) {
+      if (count < MAX_CONCURRENT_CANVAS_VIDEOS) {
+        if (video.paused) {
+          const p = video.play();
+          if (p && typeof p.catch === "function") {
+            p.catch(() => {
+              activePlayingVideos.delete(video);
+            });
+          }
+        }
+        count++;
+      } else {
+        activePlayingVideos.delete(video);
+        if (!video.paused) {
+          video.pause();
+        }
+      }
+    }
+  }
+}
+
+export function isCanvasVideosSuspended(): boolean {
+  return canvasVideosSuspended;
+}
 
 function getSharedVideoObserver(): IntersectionObserver | null {
   if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") {
@@ -66,6 +103,12 @@ function getSharedVideoObserver(): IntersectionObserver | null {
           if (entry.isIntersecting) {
             video.defaultMuted = true;
             video.muted = true;
+            if (canvasVideosSuspended) {
+              if (!video.paused) {
+                video.pause();
+              }
+              continue;
+            }
             if (
               video.paused &&
               (activePlayingVideos.has(video) ||
@@ -237,7 +280,7 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
         node.defaultMuted = true;
         node.muted = true;
         node.playsInline = true;
-        if (!pausedPreview) {
+        if (!pausedPreview && !canvasVideosSuspended) {
           const obs = getSharedVideoObserver();
           if (obs) {
             obs.observe(node);
@@ -265,9 +308,11 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
     node.defaultMuted = true;
     node.muted = true;
     node.playsInline = true;
-    if (pausedPreview) {
+    if (pausedPreview || canvasVideosSuspended) {
       activePlayingVideos.delete(node);
-      node.pause();
+      if (!node.paused) {
+        node.pause();
+      }
       return;
     }
     const obs = getSharedVideoObserver();
@@ -347,6 +392,12 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
         e.preventDefault();
         props.onDragStart?.(e);
       }}
+      style={{
+        transform: "translate3d(0, 0, 0)",
+        backfaceVisibility: "hidden",
+        WebkitBackfaceVisibility: "hidden",
+        ...props.style,
+      }}
       className={className}
       onLoadedData={(e) => {
         setFailed(false);
@@ -355,6 +406,7 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
         node.muted = true;
         if (
           !pausedPreview &&
+          !canvasVideosSuspended &&
           (activePlayingVideos.has(node) || activePlayingVideos.size < MAX_CONCURRENT_CANVAS_VIDEOS)
         ) {
           activePlayingVideos.add(node);
@@ -426,6 +478,15 @@ export function InteractiveVideo({
   const [overrideSrc, setOverrideSrc] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [failed, setFailed] = useState(false);
+
+  // When InteractiveVideo preview modal mounts, immediately suspend all background canvas videos
+  // so 100% of GPU hardware decoder bandwidth is dedicated to smooth, stutter-free playback with sound.
+  useEffect(() => {
+    setCanvasVideosSuspended(true);
+    return () => {
+      setCanvasVideosSuspended(false);
+    };
+  }, []);
 
   const activeVideoSrc = overrideSrc || resolvedSrc;
 
@@ -508,6 +569,12 @@ export function InteractiveVideo({
       aria-label={alt}
       playsInline
       preload={props.preload ?? "auto"}
+      style={{
+        transform: "translate3d(0, 0, 0)",
+        backfaceVisibility: "hidden",
+        WebkitBackfaceVisibility: "hidden",
+        ...props.style,
+      }}
       className={className}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
