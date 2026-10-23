@@ -40,17 +40,14 @@ import {
   CANVAS_DIMENSIONS,
   computeAspectDimensions,
   expandCanvasProjects,
+  PORTFOLIO_CANVAS_PROJECTS,
   resolveNonOverlappingProjects,
   type PortfolioCanvasProject,
 } from "@/data/portfolioProjects";
 import {
   buildResolvedCanvasItemsFromStore,
   loadSynchronizedCmsState,
-  mutateAddCanvasItems,
-  mutateDeleteCanvasItem,
-  mutateRandomizeCanvasItemPosition,
   readLocalCmsStore,
-  uploadMediaFilesToCms,
 } from "@/lib/cms-storage";
 
 const MIN_SCALE = 0.25;
@@ -99,25 +96,19 @@ function computeLayoutSignature(items: PortfolioCanvasProject[]): string {
 interface CanvasProjectCardProps {
   project: PortfolioCanvasProject;
   isHighlighted: boolean;
-  embeddedPreview: boolean;
   isModalOpen?: boolean;
   onCardClick: (project: PortfolioCanvasProject) => void;
   onCardKeyDown: (event: ReactKeyboardEvent<HTMLElement>, project: PortfolioCanvasProject) => void;
   onRegisterAspect: (projectId: string, naturalWidth: number, naturalHeight: number) => void;
-  onRandomizeItem: (project: PortfolioCanvasProject) => void;
-  onDeleteItem: (project: PortfolioCanvasProject) => void;
 }
 
 const CanvasProjectCard = memo(function CanvasProjectCard({
   project,
   isHighlighted,
-  embeddedPreview,
   isModalOpen = false,
   onCardClick,
   onCardKeyDown,
   onRegisterAspect,
-  onRandomizeItem,
-  onDeleteItem,
 }: CanvasProjectCardProps) {
   const videoSrc = resolveProjectVideoUrl(project);
   const isVideo = isProjectVideo(project);
@@ -131,6 +122,8 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
         top: `${project.canvasY}px`,
         width: `${project.width}px`,
         height: `${project.height}px`,
+        contentVisibility: "auto",
+        containIntrinsicSize: `${project.width}px ${project.height}px`,
       }}
       onClick={() => onCardClick(project)}
       onKeyDown={(e) => onCardKeyDown(e, project)}
@@ -187,7 +180,7 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
             height={project.height}
             loading="lazy"
             decoding="async"
-            maxRenderDimension={720}
+            maxRenderDimension={480}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}
             onLoad={(e) => {
@@ -200,42 +193,8 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
           />
         )}
 
-        {/* Quick CMS Controls on Canvas Cards when inside Studio CMS Embedded Preview */}
-        {embeddedPreview && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="absolute left-2.5 top-2.5 z-30 flex items-center gap-1.5"
-          >
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRandomizeItem(project);
-              }}
-              title="Random Place on Canvas"
-              className="liquid-glass inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-[0.65rem] font-medium text-foreground transition-colors hover:bg-white/20"
-            >
-              <Shuffle className="h-3 w-3" />
-              <span>Random</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteItem(project);
-              }}
-              title="Delete from Canvas"
-              className="liquid-glass flex h-8 w-8 items-center justify-center rounded-full text-red-300 transition-colors hover:bg-red-500/80 hover:text-white"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
-
         {/* Subtle Video Sound Hint Pill on Top-Right */}
-        {isVideo && !embeddedPreview && (
+        {isVideo && (
           <div className="pointer-events-none absolute right-3 top-3 z-20">
             <div className="liquid-glass inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.62rem] font-medium tracking-wider text-foreground opacity-85 transition-opacity group-hover:opacity-100">
               <Volume2 className="h-3 w-3 text-foreground/90" />
@@ -260,24 +219,21 @@ const CanvasProjectCard = memo(function CanvasProjectCard({
   );
 });
 
-export interface ShowcaseProps {
-  embeddedPreview?: boolean;
-  onRequestDeleteItem?: (project: PortfolioCanvasProject) => void;
-}
+export type ShowcaseProps = Record<string, never>;
 
-export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: ShowcaseProps = {}) {
+export function Showcase(_props: ShowcaseProps = {}) {
   const prefersReducedMotion = useReducedMotion();
   const viewportRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const photoStageRef = useRef<HTMLDivElement>(null);
   const zoomReadoutRef = useRef<HTMLSpanElement>(null);
-  const lastZoomPercentRef = useRef<number>(embeddedPreview ? 62 : 78);
+  const lastZoomPercentRef = useRef<number>(78);
 
   // Hardware-accelerated 120fps camera state (lives in refs so panning/zooming never re-renders React)
   // Initialized deterministically so SSR HTML and client hydration match 100%; mount effect centers to real viewport.
   const initialWidth = 1200;
-  const initialHeight = embeddedPreview ? 480 : 670;
-  const initialScale = embeddedPreview ? 0.62 : 0.78;
+  const initialHeight = 670;
+  const initialScale = 0.78;
   const initialX = Math.round(initialWidth / 2 - CANVAS_DIMENSIONS.initialFocusX * initialScale);
   const initialY = Math.round(initialHeight / 2 - CANVAS_DIMENSIONS.initialFocusY * initialScale);
 
@@ -315,9 +271,11 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
   const suppressNextCardClickRef = useRef(false);
 
   const [mounted, setMounted] = useState(false);
-  const [cmsItems, setCmsItems] = useState<PortfolioCanvasProject[]>([]);
-  const lastSignatureRef = useRef<string>(computeItemsSignature([]));
-  const lastLayoutSignatureRef = useRef<string>(computeLayoutSignature([]));
+  const [cmsItems, setCmsItems] = useState<PortfolioCanvasProject[]>(
+    () => PORTFOLIO_CANVAS_PROJECTS,
+  );
+  const lastSignatureRef = useRef<string>(computeItemsSignature(PORTFOLIO_CANVAS_PROJECTS));
+  const lastLayoutSignatureRef = useRef<string>(computeLayoutSignature(PORTFOLIO_CANVAS_PROJECTS));
 
   useEffect(() => {
     setMounted(true);
@@ -342,7 +300,6 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
 
   const [selectedProject, setSelectedProject] = useState<PortfolioCanvasProject | null>(null);
   const [videoError, setVideoError] = useState(false);
-  const [isDropTargetActive, setIsDropTargetActive] = useState(false);
 
   // Interactive Photo Preview Zoom & Pan State
   const [photoScale, setPhotoScale] = useState(1);
@@ -543,9 +500,9 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
           : typeof window !== "undefined"
             ? Math.max(320, Math.min(1280, window.innerWidth - 48))
             : 1200;
-      const vpHeight = rect.height > 0 ? rect.height : embeddedPreview ? 480 : 670;
+      const vpHeight = rect.height > 0 ? rect.height : 670;
       const isMobile = vpWidth < 640;
-      const defaultScale = embeddedPreview ? (isMobile ? 0.48 : 0.62) : isMobile ? 0.54 : 0.78;
+      const defaultScale = isMobile ? 0.54 : 0.78;
       const scale = clampScale(targetScale ?? defaultScale);
 
       const posX = Math.round(vpWidth / 2 - canvasX * scale);
@@ -578,7 +535,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
         startCameraLoop();
       }
     },
-    [applyCameraTransform, embeddedPreview, prefersReducedMotion, startCameraLoop],
+    [applyCameraTransform, prefersReducedMotion, startCameraLoop],
   );
 
   const zoomByStep = useCallback(
@@ -707,11 +664,11 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       const centerY = resolved.canvasY + dims.height / 2;
       const viewport = viewportRef.current;
       const isMobile = viewport ? viewport.clientWidth < 640 : false;
-      const targetScale = embeddedPreview ? (isMobile ? 0.56 : 0.74) : isMobile ? 0.68 : 0.9;
+      const targetScale = isMobile ? 0.68 : 0.9;
       focusCanvasPoint(centerX, centerY, targetScale, durationMs);
       pulseHighlight(resolved.id);
     },
-    [embeddedPreview, focusCanvasPoint, pulseHighlight],
+    [focusCanvasPoint, pulseHighlight],
   );
 
   const handleResetViewRef = useRef(handleResetView);
@@ -1249,89 +1206,6 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
     resetPhotoTransform,
   ]);
 
-  /**
-   * Handles dropping image or video files directly onto the canvas:
-   * reads their natural original aspect ratio, uploads to the CMS, and places them randomly without overlap.
-   */
-  const handleFilesAddedToCanvas = useCallback(
-    async (fileList: FileList | null) => {
-      if (!fileList || fileList.length === 0) return;
-      const files = Array.from(fileList).filter((file) => {
-        const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-        return (
-          file.type.startsWith("image/") ||
-          file.type.startsWith("video/") ||
-          [
-            "png",
-            "jpg",
-            "jpeg",
-            "webp",
-            "gif",
-            "svg",
-            "avif",
-            "mp4",
-            "webm",
-            "mov",
-            "m4v",
-            "mkv",
-            "avi",
-            "ogg",
-            "ogv",
-          ].includes(ext)
-        );
-      });
-      if (files.length === 0) return;
-
-      try {
-        const uploaded = await uploadMediaFilesToCms(files);
-        const res = mutateAddCanvasItems(
-          uploaded.map((u) => ({
-            title: u.title,
-            year: new Date().getFullYear().toString(),
-            mediaType: u.mediaType,
-            imageUrl: u.url,
-            videoUrl: u.mediaType === "video" ? u.url : undefined,
-            width: u.width,
-            height: u.height,
-          })),
-        );
-        updateCmsItemsIfChanged(res.items);
-        toast.success(
-          `Added ${uploaded.length} ${uploaded.length === 1 ? "item" : "items"} randomly to the canvas.`,
-        );
-        const newest = res.items[0];
-        if (newest) {
-          window.setTimeout(() => {
-            focusProjectOnCanvas(newest);
-          }, 90);
-        }
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to add media to canvas");
-      }
-    },
-    [focusProjectOnCanvas, updateCmsItemsIfChanged],
-  );
-
-  const handleCanvasDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (event.dataTransfer.types.includes("Files")) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!isDropTargetActive) setIsDropTargetActive(true);
-    }
-  };
-
-  const handleCanvasDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-    setIsDropTargetActive(false);
-  };
-
-  const handleCanvasDrop = (event: ReactDragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsDropTargetActive(false);
-    void handleFilesAddedToCanvas(event.dataTransfer.files);
-  };
-
   const handleCardClick = useCallback(
     (project: PortfolioCanvasProject) => {
       if (suppressNextCardClickRef.current) {
@@ -1351,28 +1225,6 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       }
     },
     [openProjectModal],
-  );
-
-  const handleRandomizeCard = useCallback(
-    (project: PortfolioCanvasProject) => {
-      const res = mutateRandomizeCanvasItemPosition(project.id);
-      updateCmsItemsIfChanged(res.items);
-      toast.success(`Moved "${project.title}" to a new random non-overlapping spot.`);
-    },
-    [updateCmsItemsIfChanged],
-  );
-
-  const handleDeleteCard = useCallback(
-    (project: PortfolioCanvasProject) => {
-      if (onRequestDeleteItem) {
-        onRequestDeleteItem(project);
-        return;
-      }
-      const res = mutateDeleteCanvasItem(project.id);
-      updateCmsItemsIfChanged(res.items);
-      toast.success(`Deleted "${project.title}" from canvas.`);
-    },
-    [onRequestDeleteItem, updateCmsItemsIfChanged],
   );
 
   const handleViewportKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1455,14 +1307,8 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       onPointerDown={handleViewportPointerDown}
       onPointerMove={handleViewportPointerMove}
       onPointerUp={handleViewportPointerUp}
-      onPointerCancel={handleViewportPointerUp}
-      onDragOver={handleCanvasDragOver}
-      onDragLeave={handleCanvasDragLeave}
-      onDrop={handleCanvasDrop}
       style={{ touchAction: "none" }}
-      className={`canvas-studio-grid cursor-grab relative w-full overflow-hidden rounded-[2rem] border shadow-[0_30px_100px_-20px_rgba(0,0,0,0.9)] select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 ${
-        embeddedPreview ? "h-[440px] sm:h-[520px]" : "mt-10 h-[560px] sm:h-[670px] lg:h-[760px]"
-      } ${isDropTargetActive ? "border-white/45 ring-2 ring-white/30" : "border-white/12"}`}
+      className="canvas-studio-grid cursor-grab relative w-full overflow-hidden rounded-[2rem] border border-white/12 shadow-[0_30px_100px_-20px_rgba(0,0,0,0.9)] select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 mt-10 h-[560px] sm:h-[670px] lg:h-[760px]"
     >
       {/* Subtle Ambient Radial Vignette inside Viewport */}
       <div className="pointer-events-none absolute inset-0 z-10 shadow-[inset_0_0_90px_rgba(0,0,0,0.75)]" />
@@ -1472,9 +1318,7 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
         <div className="liquid-glass inline-flex items-center gap-2.5 rounded-full px-3.5 py-2 text-[0.68rem] tracking-wider text-foreground/90">
           <Move className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="hidden sm:inline">
-            {embeddedPreview
-              ? `Live Synced Canvas (${allProjects.length} cards) · Drag to pan · Scroll to zoom · Click card to preview`
-              : "Drag to explore · Scroll to zoom · Click photo to zoom · Click video for sound"}
+            Drag to explore · Scroll to zoom · Click photo to zoom · Click video for sound
           </span>
           <span className="sm:hidden">Drag to explore · Pinch to zoom</span>
         </div>
@@ -1585,13 +1429,10 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
             key={project.id}
             project={project}
             isHighlighted={highlightedId === project.id}
-            embeddedPreview={embeddedPreview}
             isModalOpen={Boolean(selectedProject)}
             onCardClick={handleCardClick}
             onCardKeyDown={handleCardKeyDown}
             onRegisterAspect={registerNaturalAspect}
-            onRandomizeItem={handleRandomizeCard}
-            onDeleteItem={handleDeleteCard}
           />
         ))}
       </div>
@@ -1830,15 +1671,6 @@ export function Showcase({ embeddedPreview = false, onRequestDeleteItem }: Showc
       </AnimatePresence>,
       document.body,
     );
-
-  if (embeddedPreview) {
-    return (
-      <div className="relative w-full">
-        {canvasViewport}
-        {lightboxPortal}
-      </div>
-    );
-  }
 
   return (
     <section id="work" className="relative px-4 py-24 sm:px-6 sm:py-36">

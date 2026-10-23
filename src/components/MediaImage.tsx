@@ -421,28 +421,16 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       }}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
-        const isVerticalFallback =
-          (src && (src.includes("reel") || src.includes("edit") || src.includes("short"))) ?? true;
-        const fallbackVideo = isVerticalFallback
-          ? "/media/demo-vertical-reel.mp4"
-          : "/media/demo-reel-kinetic.mp4";
-
         if (key) {
           void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
             if (freshUrl && freshUrl !== activeVideoSrc) {
               setOverrideSrc(freshUrl);
-              setFailed(false);
-            } else if (activeVideoSrc !== fallbackVideo) {
-              setOverrideSrc(fallbackVideo);
               setFailed(false);
             } else {
               setFailed(true);
               onVideoError?.();
             }
           });
-        } else if (activeVideoSrc !== fallbackVideo) {
-          setOverrideSrc(fallbackVideo);
-          setFailed(false);
         } else {
           setFailed(true);
           onVideoError?.();
@@ -578,28 +566,16 @@ export function InteractiveVideo({
       className={className}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
-        const isVerticalFallback =
-          (src && (src.includes("reel") || src.includes("edit") || src.includes("short"))) ?? true;
-        const fallbackVideo = isVerticalFallback
-          ? "/media/demo-vertical-reel.mp4"
-          : "/media/demo-reel-kinetic.mp4";
-
         if (key) {
           void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
             if (freshUrl && freshUrl !== activeVideoSrc) {
               setOverrideSrc(freshUrl);
-              setFailed(false);
-            } else if (activeVideoSrc !== fallbackVideo) {
-              setOverrideSrc(fallbackVideo);
               setFailed(false);
             } else {
               setFailed(true);
               onVideoError?.();
             }
           });
-        } else if (activeVideoSrc !== fallbackVideo) {
-          setOverrideSrc(fallbackVideo);
-          setFailed(false);
         } else {
           setFailed(true);
           onVideoError?.();

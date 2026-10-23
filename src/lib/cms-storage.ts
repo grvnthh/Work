@@ -36,14 +36,13 @@ export interface UploadedMediaDescriptor {
   height: number;
 }
 
-const LOCAL_STORAGE_KEY = "grvnth_canvas_cms_store_v3";
+const LOCAL_STORAGE_KEY = "grvnth_canvas_cms_store_v6";
 const CLOUD_UPLOADED_KEYS_STORAGE_KEY = "grvnth_cms_uploaded_cloud_keys_v1";
 const BROADCAST_CHANNEL_NAME = "grvnth_canvas_cms_channel";
 const IDB_NAME = "grvnth_cms_media_idb";
 const IDB_STORE = "media_files";
-const IDB_STORE_BACKUP_KEY = "__cms_store_v5__";
-const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v5-";
-const LEGACY_SNAPSHOT_PREFIX = "cms-canvas-store-v4-";
+const IDB_STORE_BACKUP_KEY = "__cms_store_v6__";
+const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v6-";
 const SUPABASE_FALLBACK_URL = "https://jnolhqtsuyfckytngssa.supabase.co";
 const SUPABASE_FALLBACK_KEY = "sb_publishable_UtllKtAciWXasnSJ1VY35g_P5tiVA9W";
 const SUPABASE_BUCKET = "contact-attachments";
@@ -260,9 +259,13 @@ export function normalizeStore(
   if (!raw || typeof raw !== "object") {
     return createEmptyStore();
   }
+  const addedItems = Array.isArray(raw.addedItems) ? [...raw.addedItems] : [];
+  const rawDeletedIds = Array.isArray(raw.deletedIds) ? [...raw.deletedIds] : [];
+  const addedIdSet = new Set(addedItems.map((item) => item.id));
+  const deletedIds = rawDeletedIds.filter((id) => !addedIdSet.has(id));
   return {
-    addedItems: Array.isArray(raw.addedItems) ? [...raw.addedItems] : [],
-    deletedIds: Array.isArray(raw.deletedIds) ? [...raw.deletedIds] : [],
+    addedItems,
+    deletedIds,
     overrides: raw.overrides && typeof raw.overrides === "object" ? { ...raw.overrides } : {},
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date(0).toISOString(),
     ...(typeof raw.lastFocusedId === "string" ? { lastFocusedId: raw.lastFocusedId } : {}),
@@ -524,36 +527,25 @@ export function settleStoreNonOverlappingPositions(
   store: CanvasCmsStoreData,
   priorityIds: string[] = [],
 ): void {
+  if (priorityIds.length === 0) return;
   const { items } = buildResolvedCanvasItemsFromStore(store);
   const prioritySet = new Set(priorityIds);
-  const prioritized = [
-    ...items.filter((item) => prioritySet.has(item.id)),
+  // Keep all existing items locked in place first; only adjust the newly added/moved priorityIds if needed
+  const lockedExisting = [
     ...items.filter((item) => !prioritySet.has(item.id)),
+    ...items.filter((item) => prioritySet.has(item.id)),
   ];
 
-  const settled = resolveNonOverlappingProjects(prioritized, undefined, 68);
+  const settled = resolveNonOverlappingProjects(lockedExisting, undefined, 68);
   const settledMap = new Map(settled.map((item) => [item.id, item]));
 
   for (let i = 0; i < store.addedItems.length; i += 1) {
-    const updated = settledMap.get(store.addedItems[i].id);
+    const id = store.addedItems[i].id;
+    if (!prioritySet.has(id)) continue;
+    const updated = settledMap.get(id);
     if (updated) {
       store.addedItems[i] = {
         ...store.addedItems[i],
-        canvasX: updated.canvasX,
-        canvasY: updated.canvasY,
-      };
-    }
-  }
-
-  for (const baseItem of PORTFOLIO_CANVAS_PROJECTS) {
-    const updated = settledMap.get(baseItem.id);
-    if (!updated) continue;
-    const prevOverride = store.overrides[baseItem.id];
-    const changedFromBase =
-      updated.canvasX !== baseItem.canvasX || updated.canvasY !== baseItem.canvasY;
-    if (changedFromBase || prevOverride) {
-      store.overrides[baseItem.id] = {
-        ...(prevOverride ?? {}),
         canvasX: updated.canvasX,
         canvasY: updated.canvasY,
       };
@@ -586,10 +578,13 @@ export function buildResolvedCanvasItemsFromStore(
     resolvedAdded.push(merged);
   }
 
-  const nonOverlappingItems = resolveNonOverlappingProjects(resolvedAdded, undefined, 64);
+  const itemsToReturn =
+    resolvedAdded.length > 0
+      ? resolvedAdded
+      : PORTFOLIO_CANVAS_PROJECTS.filter((p) => !deletedSet.has(p.id));
 
   return {
-    items: nonOverlappingItems,
+    items: itemsToReturn,
     deletedDefaultCount: 0,
     updatedAt: store.updatedAt,
     lastFocusedId: store.lastFocusedId,
@@ -1472,9 +1467,11 @@ export function mergeCmsStores(
       delete mergedOverrides[delId];
     }
 
+    const cleanDeletedIds = Array.from(deletedSet).filter((id) => !seenIds.has(id));
+
     return {
       addedItems: mergedAddedItems,
-      deletedIds: Array.from(deletedSet),
+      deletedIds: cleanDeletedIds,
       overrides: mergedOverrides,
       updatedAt: new Date(newerTime).toISOString(),
       ...(newer.lastFocusedId && !deletedSet.has(newer.lastFocusedId)
@@ -1505,9 +1502,11 @@ export function mergeCmsStores(
     delete mergedOverrides[delId];
   }
 
+  const cleanDeletedIds = Array.from(deletedSet).filter((id) => !seenIds.has(id));
+
   return {
     addedItems: mergedAddedItems,
-    deletedIds: Array.from(deletedSet),
+    deletedIds: cleanDeletedIds,
     overrides: mergedOverrides,
     updatedAt: new Date(newerTime).toISOString(),
     ...(newer.lastFocusedId && !deletedSet.has(newer.lastFocusedId)
@@ -1520,29 +1519,13 @@ export function mergeCmsStores(
 
 async function readCloudCmsStoreSnapshot(): Promise<CanvasCmsStoreData | null> {
   try {
-    const v5Files = await listSupabaseSnapshotsRest(CMS_SNAPSHOT_PREFIX, 16);
-    for (const file of v5Files) {
+    const v6Files = await listSupabaseSnapshotsRest(CMS_SNAPSHOT_PREFIX, 16);
+    for (const file of v6Files) {
       const text = await downloadSupabaseObjectTextRest(`inquiries/${file.name}`);
       if (!text) continue;
       try {
         const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
         if (new Date(parsed.updatedAt || 0).getTime() > 0) {
-          return parsed;
-        }
-      } catch {
-        // Try next snapshot
-      }
-    }
-
-    // Fallback to non-empty v4 snapshots if no v5 snapshot exists yet
-    const v4Files = await listSupabaseSnapshotsRest(LEGACY_SNAPSHOT_PREFIX, 6);
-    for (const file of v4Files) {
-      const text = await downloadSupabaseObjectTextRest(`inquiries/${file.name}`);
-      if (!text) continue;
-      try {
-        const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
-        const t = new Date(parsed.updatedAt || 0).getTime();
-        if (t > 0 && (parsed.addedItems.length > 0 || parsed.deletedIds.length > 0)) {
           return parsed;
         }
       } catch {

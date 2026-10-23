@@ -46,8 +46,7 @@ function safeDecodeURIComponent(val: string): string {
   }
 }
 
-const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v5-";
-const LEGACY_SNAPSHOT_PREFIX = "cms-canvas-store-v4-";
+const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v6-";
 const SUPABASE_FALLBACK_URL = "https://jnolhqtsuyfckytngssa.supabase.co";
 const SUPABASE_FALLBACK_KEY = "sb_publishable_UtllKtAciWXasnSJ1VY35g_P5tiVA9W";
 const SUPABASE_BUCKET = "contact-attachments";
@@ -213,29 +212,13 @@ async function readSupabaseCanvasCmsStore(forceFresh = false): Promise<CanvasCms
   }
 
   try {
-    const v5Files = await listServerSupabaseSnapshots(CMS_SNAPSHOT_PREFIX, 16);
-    for (const file of v5Files) {
+    const v6Files = await listServerSupabaseSnapshots(CMS_SNAPSHOT_PREFIX, 16);
+    for (const file of v6Files) {
       const text = await downloadServerSupabaseText(`inquiries/${file.name}`);
       if (!text) continue;
       try {
         const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
         if (new Date(parsed.updatedAt || 0).getTime() > 0) {
-          globalState.__GRVNTH_CLOUD_STORE_CACHE__ = { store: parsed, fetchedAt: Date.now() };
-          return parsed;
-        }
-      } catch {
-        // Try next snapshot
-      }
-    }
-
-    const v4Files = await listServerSupabaseSnapshots(LEGACY_SNAPSHOT_PREFIX, 10);
-    for (const file of v4Files) {
-      const text = await downloadServerSupabaseText(`inquiries/${file.name}`);
-      if (!text) continue;
-      try {
-        const parsed = normalizeStore(JSON.parse(text) as Partial<CanvasCmsStoreData>);
-        const t = new Date(parsed.updatedAt || 0).getTime();
-        if (t > 0 && (parsed.addedItems.length > 0 || parsed.deletedIds.length > 0)) {
           globalState.__GRVNTH_CLOUD_STORE_CACHE__ = { store: parsed, fetchedAt: Date.now() };
           return parsed;
         }
@@ -723,54 +706,6 @@ export const Route = createFileRoute("/api/drive-media")({
               return Response.json({ exists: true, size: 1 });
             }
             return Response.redirect(supabaseSignedUrl, 302);
-          }
-
-          // Graceful fallback for visitors or sessions where a local-only file has not yet synced:
-          // Stream a matching high-quality portfolio asset rather than breaking the canvas with 404.
-          const isVideo = [
-            ".mp4",
-            ".webm",
-            ".mov",
-            ".m4v",
-            ".mkv",
-            ".avi",
-            ".ogg",
-            ".ogv",
-          ].includes(ext.toLowerCase());
-          if (isVideo) {
-            const isVertical =
-              safeName.includes("reel") ||
-              safeName.includes("edit") ||
-              safeName.includes("vertical") ||
-              safeName.includes("tiktok") ||
-              safeName.includes("short");
-            const fallbackVideo = isVertical
-              ? path.resolve(process.cwd(), "public", "media", "demo-vertical-reel.mp4")
-              : path.resolve(process.cwd(), "public", "media", "demo-reel-kinetic.mp4");
-            if (fs.existsSync(fallbackVideo)) {
-              if (isCheckOnly) {
-                return Response.json({ exists: true, size: fs.statSync(fallbackVideo).size });
-              }
-              return streamLocalFile(
-                fallbackVideo,
-                "video/mp4",
-                path.basename(fallbackVideo),
-                request,
-              );
-            }
-          } else {
-            const fallbackImage = path.resolve(process.cwd(), "public", "media", "showcase-1.png");
-            if (fs.existsSync(fallbackImage)) {
-              if (isCheckOnly) {
-                return Response.json({ exists: true, size: fs.statSync(fallbackImage).size });
-              }
-              return streamLocalFile(
-                fallbackImage,
-                "image/png",
-                path.basename(fallbackImage),
-                request,
-              );
-            }
           }
 
           if (isCheckOnly) {

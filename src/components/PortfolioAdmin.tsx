@@ -1,955 +1,929 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { createPortal } from "react-dom";
-import { Link, useNavigate } from "@tanstack/react-router";
 import {
-  AlertTriangle,
-  ArrowLeft,
-  Compass,
-  ExternalLink,
-  Eye,
-  EyeOff,
-  Film,
-  Image as ImageIcon,
-  Layers,
-  Loader2,
-  LogOut,
-  Shuffle,
-  Sparkles,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+  type FormEvent,
+  type ChangeEvent,
+} from "react";
+import { Link } from "@tanstack/react-router";
+import {
+  Plus,
   Trash2,
-  Undo2,
-  Upload,
-  Volume2,
-  X,
+  Edit3,
+  RefreshCw,
+  Lock,
+  Unlock,
+  Save,
+  Check,
+  Shuffle,
+  UploadCloud,
+  Search,
+  Video,
+  Image as ImageIcon,
+  ArrowLeft,
+  ShieldCheck,
+  AlertCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { MediaImage, SilentAutoPlayVideo, isVideoSource } from "@/components/MediaImage";
-import { Showcase } from "@/components/sections/Showcase";
-import { clearCmsAuthentication, isCmsAuthenticated } from "@/routes/auth";
-import { expandCanvasProjects, type PortfolioCanvasProject } from "@/data/portfolioProjects";
+import { PORTFOLIO_CANVAS_PROJECTS, type PortfolioCanvasProject } from "@/data/portfolioProjects";
 import {
   broadcastCanvasCmsUpdate,
-  buildResolvedCanvasItemsFromStore,
-  canUndoCmsAction,
-  flushPendingCmsPush,
   loadSynchronizedCmsState,
   mutateAddCanvasItems,
-  mutateClearAllCanvasItems,
+  mutateUpdateCanvasItem,
   mutateDeleteCanvasItem,
-  mutateFocusCanvasItem,
   mutateRandomizeCanvasItemPosition,
-  mutateShuffleAllCanvasItems,
-  mutateUndoLastCmsAction,
+  pushStoreToServer,
   readLocalCmsStore,
-  uploadMediaFilesToCms,
 } from "@/lib/cms-storage";
 
-export interface PortfolioAdminProps {
-  embedded?: boolean;
-  onClose?: () => void;
-  onItemsChange?: (items: PortfolioCanvasProject[]) => void;
-  onLocateOnCanvas?: (project: PortfolioCanvasProject) => void;
-}
+const AUTH_STORAGE_KEY = "grvnth_cms_auth_token_v5";
+const ADMIN_PASSCODE = "Granth@246";
 
-type PendingDeletionConfirmation =
-  | {
-      type: "delete-item";
-      item: PortfolioCanvasProject;
-    }
-  | {
-      type: "clear-all";
-      count: number;
-    };
+export function PortfolioAdmin() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return Boolean(
+      window.localStorage.getItem(AUTH_STORAGE_KEY) ||
+      window.sessionStorage.getItem(AUTH_STORAGE_KEY),
+    );
+  });
+  const [passcodeInput, setPasscodeInput] = useState("");
+  const [authError, setAuthError] = useState(false);
 
-export function PortfolioAdmin({
-  embedded = false,
-  onClose,
-  onItemsChange,
-  onLocateOnCanvas,
-}: PortfolioAdminProps) {
-  const navigate = useNavigate();
-  const [items, setItems] = useState<PortfolioCanvasProject[]>(
-    () => buildResolvedCanvasItemsFromStore(readLocalCmsStore()).items,
-  );
-  const [canUndo, setCanUndo] = useState<boolean>(() => canUndoCmsAction());
-  const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [isDragOver, setIsDragOver] = useState(false);
-  const [showLiveCanvasPreview, setShowLiveCanvasPreview] = useState(false);
-  const [recentlyMovedId, setRecentlyMovedId] = useState<string | null>(null);
-  const [pendingConfirm, setPendingConfirm] = useState<PendingDeletionConfirmation | null>(null);
-  const [filterType, setFilterType] = useState<"all" | "image" | "video">("all");
+  const [items, setItems] = useState<PortfolioCanvasProject[]>(() => PORTFOLIO_CANVAS_PROJECTS);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [mediaFilter, setMediaFilter] = useState<"all" | "video" | "image">("all");
 
-  const quickUploadInputRef = useRef<HTMLInputElement>(null);
-  const canvasPreviewSectionRef = useRef<HTMLDivElement>(null);
-  const movedTimerRef = useRef<number | null>(null);
-  const isInternalSyncRef = useRef(false);
+  // Add Item Modal
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newYear, setNewYear] = useState("2026");
+  const [newMediaType, setNewMediaType] = useState<"image" | "video">("image");
+  const [newMediaUrl, setNewMediaUrl] = useState("");
+  const [newVideoUrl, setNewVideoUrl] = useState("");
+  const [newExternalUrl, setNewExternalUrl] = useState("");
+  const [newWidth, setNewWidth] = useState(310);
+  const [newHeight, setNewHeight] = useState(310);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
 
-  const syncState = useCallback(
-    (res: { items: PortfolioCanvasProject[] }, focusedId?: string) => {
-      setItems(res.items);
-      setCanUndo(canUndoCmsAction());
-      onItemsChange?.(res.items);
-      isInternalSyncRef.current = true;
-      try {
-        broadcastCanvasCmsUpdate(res.items, focusedId);
-      } finally {
-        isInternalSyncRef.current = false;
-      }
-    },
-    [onItemsChange],
-  );
+  // Edit Item Modal
+  const [editingItem, setEditingItem] = useState<PortfolioCanvasProject | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editYear, setEditYear] = useState("");
+  const [editExternalUrl, setEditExternalUrl] = useState("");
+  const [editCanvasX, setEditCanvasX] = useState(0);
+  const [editCanvasY, setEditCanvasY] = useState(0);
+  const [editWidth, setEditWidth] = useState(310);
+  const [editHeight, setEditHeight] = useState(310);
 
-  const handleUndoDelete = useCallback(() => {
-    isInternalSyncRef.current = true;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadItems = useCallback(async () => {
+    setLoading(true);
     try {
-      const restored = mutateUndoLastCmsAction();
-      if (restored) {
-        syncState(restored);
-        void flushPendingCmsPush();
-        toast.success("Undid last deletion and restored canvas items!");
-      }
-    } finally {
-      isInternalSyncRef.current = false;
-    }
-  }, [syncState]);
-
-  const loadState = useCallback(async () => {
-    try {
-      setLoading(true);
       const res = await loadSynchronizedCmsState();
-      setItems(res.items);
-      setCanUndo(canUndoCmsAction());
-      onItemsChange?.(res.items);
-      isInternalSyncRef.current = true;
-      try {
-        broadcastCanvasCmsUpdate(res.items);
-      } finally {
-        isInternalSyncRef.current = false;
+      if (res?.items && res.items.length > 0) {
+        setItems(res.items);
+      } else {
+        setItems(PORTFOLIO_CANVAS_PROJECTS);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load Canvas CMS");
+      console.warn("Failed to load synchronized canvas items, using base:", err);
+      setItems(PORTFOLIO_CANVAS_PROJECTS);
     } finally {
       setLoading(false);
     }
-  }, [onItemsChange]);
-
-  useEffect(() => {
-    if (!isCmsAuthenticated()) {
-      void navigate({ to: "/auth", replace: true });
-      return;
-    }
-    const localResolved = buildResolvedCanvasItemsFromStore(readLocalCmsStore());
-    setItems(localResolved.items);
-    setCanUndo(canUndoCmsAction());
-    void loadState();
-
-    const onExternalUpdate = () => {
-      if (isInternalSyncRef.current) return;
-      const resolved = buildResolvedCanvasItemsFromStore(readLocalCmsStore());
-      setItems(resolved.items);
-      setCanUndo(canUndoCmsAction());
-    };
-
-    window.addEventListener("canvas-cms-updated", onExternalUpdate);
-    window.addEventListener("storage", onExternalUpdate);
-    return () => {
-      window.removeEventListener("canvas-cms-updated", onExternalUpdate);
-      window.removeEventListener("storage", onExternalUpdate);
-    };
-  }, [loadState, navigate]);
-
-  // Live cross-tab, cross-device background sync for CMS dashboard
-  useEffect(() => {
-    let active = true;
-
-    const syncFromServer = () => {
-      if (isInternalSyncRef.current || uploading) return;
-      void loadSynchronizedCmsState()
-        .then((res) => {
-          if (!active || !res?.items) return;
-          setItems((prev) => {
-            const prevSig = prev
-              .map((p) => `${p.id}@${p.canvasX},${p.canvasY},${p.title},${p.imageUrl}`)
-              .join("|");
-            const nextSig = res.items
-              .map((p) => `${p.id}@${p.canvasX},${p.canvasY},${p.title},${p.imageUrl}`)
-              .join("|");
-            return prevSig !== nextSig ? res.items : prev;
-          });
-          setCanUndo(canUndoCmsAction());
-          onItemsChange?.(res.items);
-        })
-        .catch(() => {});
-    };
-
-    const onVisibilityOrFocus = () => {
-      if (document.visibilityState === "visible") {
-        syncFromServer();
-      }
-    };
-
-    const onServerSynced = (e: Event) => {
-      if (isInternalSyncRef.current) return;
-      const custom = e as CustomEvent<{ items?: PortfolioCanvasProject[] }>;
-      if (Array.isArray(custom.detail?.items)) {
-        setItems(custom.detail.items);
-        setCanUndo(canUndoCmsAction());
-        onItemsChange?.(custom.detail.items);
-      }
-    };
-
-    window.addEventListener("focus", onVisibilityOrFocus);
-    document.addEventListener("visibilitychange", onVisibilityOrFocus);
-    window.addEventListener("canvas-cms-server-synced", onServerSynced);
-
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        syncFromServer();
-      }
-    }, 2500);
-
-    return () => {
-      active = false;
-      window.removeEventListener("focus", onVisibilityOrFocus);
-      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
-      window.removeEventListener("canvas-cms-server-synced", onServerSynced);
-      window.clearInterval(intervalId);
-    };
-  }, [onItemsChange, uploading]);
-
-  // Close confirmation modal on Escape key
-  useEffect(() => {
-    if (!pendingConfirm) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setPendingConfirm(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [pendingConfirm]);
-
-  const markRecentlyMoved = useCallback((id: string) => {
-    setRecentlyMovedId(id);
-    if (movedTimerRef.current) {
-      window.clearTimeout(movedTimerRef.current);
-    }
-    movedTimerRef.current = window.setTimeout(() => {
-      setRecentlyMovedId((prev) => (prev === id ? null : prev));
-    }, 2400);
   }, []);
 
-  const handleSignOut = async () => {
-    clearCmsAuthentication();
-    toast.success("Signed out of Studio CMS.");
-    await navigate({ to: "/auth", replace: true });
+  useEffect(() => {
+    if (isAuthenticated) {
+      void loadItems();
+    }
+  }, [isAuthenticated, loadItems]);
+
+  const handleLogin = (e: FormEvent) => {
+    e.preventDefault();
+    if (passcodeInput.trim() === ADMIN_PASSCODE) {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(AUTH_STORAGE_KEY, "true");
+        window.sessionStorage.setItem(AUTH_STORAGE_KEY, "true");
+      }
+      setIsAuthenticated(true);
+      setAuthError(false);
+      toast.success("Welcome back");
+    } else {
+      setAuthError(true);
+      toast.error("Invalid passcode");
+    }
   };
 
-  const expandedItems = useMemo(() => expandCanvasProjects(items), [items]);
-  const totalCanvasCards = expandedItems.length;
-  const totalVideoCards = useMemo(
-    () =>
-      expandedItems.filter(
-        (p) => p.mediaType === "video" || isVideoSource(p.videoUrl || p.imageUrl),
-      ).length,
-    [expandedItems],
-  );
-  const totalPhotoCards = totalCanvasCards - totalVideoCards;
+  const handleLogout = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    }
+    setIsAuthenticated(false);
+    toast.info("Signed out of dashboard");
+  };
+
+  const handleManualSyncToCode = async () => {
+    setSyncing(true);
+    try {
+      const store = readLocalCmsStore();
+      await pushStoreToServer(store, true);
+      const res = await loadSynchronizedCmsState();
+      if (res?.items) {
+        setItems(res.items);
+      }
+      toast.success(`Synced ${items.length} projects to cloud & disk!`);
+    } catch {
+      toast.error("Failed to sync store");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const isVideo = file.type.startsWith("video/") || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
+    setNewMediaType(isVideo ? "video" : "image");
+    setUploadProgress("Reading media file...");
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      setNewMediaUrl(result);
+      if (isVideo) {
+        setNewVideoUrl(result);
+        setNewWidth(270);
+        setNewHeight(380);
+      } else {
+        const img = new Image();
+        img.onload = () => {
+          if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+            const ratio = img.naturalWidth / img.naturalHeight;
+            const targetArea = 310 * 310;
+            const rawW = Math.round(Math.min(460, Math.max(220, Math.sqrt(targetArea * ratio))));
+            const rawH = Math.round(rawW / ratio);
+            setNewWidth(rawW);
+            setNewHeight(rawH);
+          }
+        };
+        img.src = result;
+      }
+
+      if (!newTitle) {
+        const cleanName = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+        setNewTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+      }
+      setUploadProgress(null);
+      toast.success(`Loaded ${file.name}`);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleCreateItem = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!newMediaUrl.trim()) {
+      toast.error("Please provide an image or video file / URL");
+      return;
+    }
+
+    setSyncing(true);
+    const id = `item-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newItem = {
+      id,
+      title: newTitle.trim() || "Untitled Project",
+      description: "",
+      year: newYear.trim() || "2026",
+      mediaType: newMediaType,
+      imageUrl: newMediaUrl.trim(),
+      videoUrl: newMediaType === "video" ? newVideoUrl.trim() || newMediaUrl.trim() : undefined,
+      externalUrl: newExternalUrl.trim() || undefined,
+      width: newWidth,
+      height: newHeight,
+    };
+
+    try {
+      const localRes = mutateAddCanvasItems([newItem]);
+      setItems(localRes.items);
+      broadcastCanvasCmsUpdate(localRes.items, id);
+      setIsAddModalOpen(false);
+      setNewTitle("");
+      setNewMediaUrl("");
+      setNewVideoUrl("");
+      setNewExternalUrl("");
+      toast.success(`"${newItem.title}" added and locked to canvas!`);
+    } catch {
+      toast.error("Failed to add project to canvas");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const openEditModal = (item: PortfolioCanvasProject) => {
+    setEditingItem(item);
+    setEditTitle(item.title);
+    setEditYear(item.year || "2026");
+    setEditExternalUrl(item.externalUrl || "");
+    setEditCanvasX(item.canvasX);
+    setEditCanvasY(item.canvasY);
+    setEditWidth(item.width);
+    setEditHeight(item.height);
+  };
+
+  const handleSaveEdit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingItem) return;
+
+    setSyncing(true);
+    const payload = {
+      id: editingItem.id,
+      title: editTitle,
+      year: editYear,
+      externalUrl: editExternalUrl,
+      canvasX: editCanvasX,
+      canvasY: editCanvasY,
+      width: editWidth,
+      height: editHeight,
+    };
+    try {
+      const localRes = mutateUpdateCanvasItem(payload);
+      setItems(localRes.items);
+      broadcastCanvasCmsUpdate(localRes.items, editingItem.id);
+      setEditingItem(null);
+      toast.success(`Saved changes to "${editTitle}"`);
+    } catch {
+      toast.error("Failed to update item");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleNudgeItem = async (id: string, title: string) => {
+    setSyncing(true);
+    try {
+      const localRes = mutateRandomizeCanvasItemPosition(id);
+      setItems(localRes.items);
+      broadcastCanvasCmsUpdate(localRes.items, id);
+      toast.success(`Repositioned "${title}"`);
+    } catch {
+      toast.error("Failed to reposition item");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleDeleteItem = async (id: string, title: string) => {
+    setSyncing(true);
+    try {
+      const localRes = mutateDeleteCanvasItem(id);
+      setItems(localRes.items);
+      broadcastCanvasCmsUpdate(localRes.items);
+      toast.success(`Removed "${title}"`);
+    } catch {
+      toast.error("Failed to delete item");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      const isVid = item.mediaType === "video" || isVideoSource(item.videoUrl || item.imageUrl);
-      if (filterType === "video" && !isVid) return false;
-      if (filterType === "image" && isVid) return false;
+      if (mediaFilter === "video" && item.mediaType !== "video") return false;
+      if (mediaFilter === "image" && item.mediaType === "video") return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchesTitle = item.title.toLowerCase().includes(q);
+        const matchesYear = (item.year || "").toLowerCase().includes(q);
+        return matchesTitle || matchesYear;
+      }
       return true;
     });
-  }, [items, filterType]);
+  }, [items, mediaFilter, searchQuery]);
 
-  // Direct single or multi-file upload -> automatically placed on canvas in original aspect ratio
-  const handleQuickUploadFiles = async (fileList: FileList | File[] | null) => {
-    if (!fileList) return;
-    const validFiles = Array.from(fileList).filter((f) => {
-      const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
-      return (
-        f.type.startsWith("image/") ||
-        f.type.startsWith("video/") ||
-        [
-          "png",
-          "jpg",
-          "jpeg",
-          "webp",
-          "gif",
-          "svg",
-          "avif",
-          "mp4",
-          "webm",
-          "mov",
-          "m4v",
-          "mkv",
-          "avi",
-          "ogg",
-          "ogv",
-        ].includes(ext)
-      );
-    });
+  const videoCount = useMemo(() => items.filter((i) => i.mediaType === "video").length, [items]);
+  const imageCount = useMemo(() => items.filter((i) => i.mediaType !== "video").length, [items]);
 
-    if (validFiles.length === 0) {
-      toast.error("Please select image or video files.");
-      return;
-    }
+  // LOGIN SCREEN
+  if (!isAuthenticated) {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,255,255,0.06),transparent_60%)]" />
+        <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/10 bg-neutral-900/80 p-8 shadow-2xl backdrop-blur-xl">
+          <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-foreground">
+            <Lock className="h-6 w-6 text-foreground/80" />
+          </div>
 
-    setUploading(true);
-    try {
-      const uploaded = await uploadMediaFilesToCms(validFiles);
-      isInternalSyncRef.current = true;
-      const res = mutateAddCanvasItems(
-        uploaded.map((u) => ({
-          title: u.title,
-          mediaType: u.mediaType,
-          imageUrl: u.url,
-          videoUrl: u.mediaType === "video" ? u.url : undefined,
-          width: u.width,
-          height: u.height,
-        })),
-      );
-      isInternalSyncRef.current = false;
-      syncState(res, res.lastFocusedId);
-      if (res.lastFocusedId) {
-        markRecentlyMoved(res.lastFocusedId);
-      }
-      await flushPendingCmsPush();
-      toast.success(
-        `Uploaded ${uploaded.length} ${uploaded.length === 1 ? "file" : "files"} directly to the canvas!`,
-      );
-    } catch (err) {
-      isInternalSyncRef.current = false;
-      toast.error(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-      if (quickUploadInputRef.current) {
-        quickUploadInputRef.current.value = "";
-      }
-    }
-  };
+          <h1 className="text-center font-display text-2xl font-bold tracking-tight">
+            Admin Access
+          </h1>
+          <p className="mt-2 text-center text-xs leading-relaxed text-muted-foreground">
+            Enter your admin passcode to access portfolio media, canvas layouts, and dual-store
+            sync.
+          </p>
 
-  // Request confirmation before deleting an item
-  const requestDeleteItem = useCallback((item: PortfolioCanvasProject) => {
-    setPendingConfirm({
-      type: "delete-item",
-      item,
-    });
-  }, []);
-
-  // Request confirmation before clearing all items
-  const requestClearAllItems = () => {
-    setPendingConfirm({
-      type: "clear-all",
-      count: items.length,
-    });
-  };
-
-  // Execute confirmed deletion
-  const handleConfirmPendingDeletion = () => {
-    if (!pendingConfirm) return;
-    const action = pendingConfirm;
-    setPendingConfirm(null);
-
-    isInternalSyncRef.current = true;
-    try {
-      if (action.type === "delete-item") {
-        const res = mutateDeleteCanvasItem(action.item.id);
-        syncState(res);
-        void flushPendingCmsPush();
-        toast.success("Removed item from canvas.", {
-          action: {
-            label: "Undo",
-            onClick: handleUndoDelete,
-          },
-        });
-      } else if (action.type === "clear-all") {
-        const res = mutateClearAllCanvasItems();
-        syncState(res);
-        void flushPendingCmsPush();
-        toast.success("Cleared all items from the canvas.", {
-          action: {
-            label: "Undo",
-            onClick: handleUndoDelete,
-          },
-        });
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
-    } finally {
-      isInternalSyncRef.current = false;
-    }
-  };
-
-  // Re-randomize an item's canvas position without overlapping
-  const handleRandomizePosition = (item: PortfolioCanvasProject) => {
-    isInternalSyncRef.current = true;
-    try {
-      const res = mutateRandomizeCanvasItemPosition(item.id);
-      syncState(res, item.id);
-      markRecentlyMoved(item.id);
-      void flushPendingCmsPush();
-      const updatedItem = res.items.find((i) => i.id === item.id);
-      toast.success(
-        updatedItem
-          ? `Moved item to position (${updatedItem.canvasX}, ${updatedItem.canvasY}).`
-          : "Randomized item position on canvas.",
-      );
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to randomize position");
-    } finally {
-      isInternalSyncRef.current = false;
-    }
-  };
-
-  // Shuffle all items on the canvas
-  const handleShuffleAllPositions = () => {
-    isInternalSyncRef.current = true;
-    try {
-      const res = mutateShuffleAllCanvasItems();
-      syncState(res);
-      void flushPendingCmsPush();
-      toast.success("Randomized all item positions across the canvas without overlap!");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to shuffle canvas");
-    } finally {
-      isInternalSyncRef.current = false;
-    }
-  };
-
-  // Locate an item on the Live Canvas
-  const handleLocateItem = (item: PortfolioCanvasProject) => {
-    isInternalSyncRef.current = true;
-    const res = mutateFocusCanvasItem(item.id);
-    isInternalSyncRef.current = false;
-    syncState(res, item.id);
-    markRecentlyMoved(item.id);
-
-    if (onLocateOnCanvas) {
-      onLocateOnCanvas(item);
-      return;
-    }
-
-    if (!showLiveCanvasPreview) {
-      setShowLiveCanvasPreview(true);
-    }
-
-    window.setTimeout(() => {
-      canvasPreviewSectionRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-      isInternalSyncRef.current = true;
-      try {
-        broadcastCanvasCmsUpdate(res.items, item.id);
-      } finally {
-        isInternalSyncRef.current = false;
-      }
-    }, 60);
-  };
-
-  const handleDropZoneDragOver = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isDragOver) setIsDragOver(true);
-  };
-
-  const handleDropZoneDragLeave = (e: DragEvent<HTMLDivElement>) => {
-    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-    setIsDragOver(false);
-  };
-
-  const handleDropZoneDrop = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-    void handleQuickUploadFiles(e.dataTransfer.files);
-  };
-
-  return (
-    <div
-      className={
-        embedded
-          ? "flex h-full w-full flex-col bg-neutral-950/95 text-foreground"
-          : "min-h-screen bg-background text-foreground grain"
-      }
-    >
-      {/* Top Studio Header Bar */}
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-neutral-950/90 px-4 py-3.5 backdrop-blur-xl sm:px-8">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 sm:gap-4">
-          <div className="flex items-center gap-3 sm:gap-4">
-            {embedded && onClose ? (
-              <button
-                type="button"
-                onClick={onClose}
-                className="liquid-glass inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-white/15"
+          <form onSubmit={handleLogin} className="mt-6 space-y-4">
+            <div>
+              <label
+                htmlFor="passcode"
+                className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-muted-foreground"
               >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                <span>Back to Canvas</span>
-              </button>
-            ) : (
+                Passcode
+              </label>
+              <input
+                id="passcode"
+                type="password"
+                value={passcodeInput}
+                onChange={(e) => {
+                  setPasscodeInput(e.target.value);
+                  setAuthError(false);
+                }}
+                placeholder="Enter passcode"
+                autoFocus
+                className={`w-full rounded-xl border bg-black/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 ${
+                  authError
+                    ? "border-red-500/80 focus:ring-red-500/30"
+                    : "border-white/15 focus:border-white/40 focus:ring-white/20"
+                }`}
+              />
+              {authError && (
+                <p className="mt-1.5 flex items-center gap-1 text-xs text-red-400">
+                  <AlertCircle className="h-3.5 w-3.5" /> Invalid passcode.
+                </p>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-xs font-semibold uppercase tracking-wider text-black transition-opacity hover:opacity-90"
+            >
+              <Unlock className="h-4 w-4" />
+              <span>Unlock Dashboard</span>
+            </button>
+
+            <div className="pt-2 text-center">
               <Link
                 to="/"
-                hash="work"
-                className="liquid-glass inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-white/15"
+                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                <span>Live Canvas</span>
+                <ArrowLeft className="h-3.5 w-3.5" /> Return to Website
               </Link>
-            )}
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
+  // MAIN CMS DASHBOARD
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      {/* Top sticky navbar */}
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-neutral-950/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3.5 sm:px-6">
+          <div className="flex items-center gap-3">
+            <Link
+              to="/"
+              className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Live Site</span>
+            </Link>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-[0.6rem] uppercase tracking-[0.3em] text-emerald-400">
-                  Studio CMS · Granth Agrawal
+                <h1 className="font-display text-lg font-bold tracking-tight">Granth Dashboard</h1>
+                <span className="hidden items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[0.65rem] font-medium tracking-wide text-emerald-400 sm:inline-flex">
+                  <ShieldCheck className="h-3 w-3" /> Zero-Drift Locked
                 </span>
               </div>
-              <h1 className="font-display text-base font-bold tracking-tight sm:text-xl">
-                Infinite Canvas Dashboard
-              </h1>
             </div>
           </div>
 
-          {/* Stats & Primary Actions */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 font-mono text-[0.65rem] text-muted-foreground lg:inline-flex">
-              <span>{items.length} Items</span>
-              <span>·</span>
-              <span>{totalPhotoCards} Pics</span>
-              <span>·</span>
-              <span>{totalVideoCards} Videos</span>
-            </div>
-
-            {canUndo && (
-              <button
-                type="button"
-                onClick={handleUndoDelete}
-                title="Undo last delete action"
-                className="inline-flex h-9 items-center gap-1.5 rounded-full border border-emerald-500/35 bg-emerald-500/15 px-3 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/25"
-              >
-                <Undo2 className="h-3.5 w-3.5" />
-                <span>Undo</span>
-              </button>
-            )}
-
-            {!embedded && (
-              <button
-                type="button"
-                onClick={() => setShowLiveCanvasPreview((prev) => !prev)}
-                className="liquid-glass inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-foreground/90 transition-colors hover:bg-white/15"
-              >
-                {showLiveCanvasPreview ? (
-                  <>
-                    <EyeOff className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Hide Canvas</span>
-                  </>
-                ) : (
-                  <>
-                    <Eye className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Preview Canvas</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            {items.length > 1 && (
-              <button
-                type="button"
-                onClick={handleShuffleAllPositions}
-                className="liquid-glass inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-foreground/90 transition-colors hover:bg-white/15"
-                title="Randomize all items across canvas without overlap"
-              >
-                <Shuffle className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Shuffle All</span>
-              </button>
-            )}
-
-            {items.length > 0 && (
-              <button
-                type="button"
-                onClick={requestClearAllItems}
-                className="inline-flex h-9 items-center gap-1.5 rounded-full border border-red-500/25 bg-red-500/10 px-3 text-xs font-medium text-red-300 transition-colors hover:bg-red-500/20"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Clear All</span>
-              </button>
-            )}
-
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
-              type="button"
-              disabled={uploading}
-              onClick={() => quickUploadInputRef.current?.click()}
-              className="inline-flex h-9 items-center gap-1.5 rounded-full bg-foreground px-4 text-xs font-semibold uppercase tracking-wider text-background transition-transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
+              onClick={handleManualSyncToCode}
+              disabled={syncing}
+              title="Dual-write to both data/canvas-cms.json and src/data/portfolioProjects.ts"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-medium text-foreground transition-all hover:bg-white/10 disabled:opacity-50"
             >
-              {uploading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Upload className="h-3.5 w-3.5" />
-              )}
-              <span>{uploading ? "Uploading…" : "Upload to Canvas"}</span>
+              <Save className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Sync to Code</span>
             </button>
 
-            <input
-              ref={quickUploadInputRef}
-              type="file"
-              multiple
-              accept="image/*,video/*,.mp4,.webm,.mov,.m4v,.mkv,.avi,.png,.jpg,.jpeg,.webp,.gif,.svg,.avif"
-              className="hidden"
-              onChange={(e) => void handleQuickUploadFiles(e.target.files)}
-            />
-
             <button
-              type="button"
-              onClick={() => void handleSignOut()}
-              aria-label="Sign out of CMS"
-              className="liquid-glass inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-white/15 hover:text-foreground"
+              onClick={() => setIsAddModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white px-3.5 py-2 text-xs font-semibold text-black transition-opacity hover:opacity-90"
             >
-              <LogOut className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Sign Out</span>
+              <Plus className="h-4 w-4" />
+              <span>Add Media</span>
             </button>
 
-            {embedded && onClose && (
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close CMS"
-                className="liquid-glass flex h-9 w-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-white/20"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
+            <button
+              onClick={handleLogout}
+              className="rounded-xl border border-white/10 px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Sign Out
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="mx-auto w-full max-w-7xl flex-1 space-y-6 px-4 py-6 sm:px-8">
-        {/* Direct Drag-and-Drop Multi-File Upload Zone */}
-        <div
-          onDragOver={handleDropZoneDragOver}
-          onDragLeave={handleDropZoneDragLeave}
-          onDrop={handleDropZoneDrop}
-          onClick={() => !uploading && quickUploadInputRef.current?.click()}
-          className={`group relative cursor-pointer overflow-hidden rounded-[1.75rem] border border-dashed p-6 transition-all sm:p-8 ${
-            isDragOver
-              ? "border-white/60 bg-white/[0.08]"
-              : "border-white/15 bg-white/[0.02] hover:border-white/30 hover:bg-white/[0.04]"
-          }`}
-        >
-          <div className="flex flex-col items-center justify-between gap-5 text-center sm:flex-row sm:text-left">
-            <div className="flex flex-col items-center gap-4 sm:flex-row">
-              <div className="liquid-glass flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-foreground">
-                {uploading ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
-                  <Sparkles className="h-5 w-5" />
-                )}
-              </div>
-              <div>
-                <p className="font-mono text-[0.62rem] uppercase tracking-[0.3em] text-muted-foreground">
-                  Instant Direct Upload · Single or Multiple Files
-                </p>
-                <h2 className="mt-1 font-display text-lg font-bold sm:text-xl">
-                  Drop one or many photos & videos here to upload directly to the canvas
-                </h2>
-                <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-                  Every uploaded file is automatically placed on the infinite canvas in its original
-                  aspect ratio with zero extra steps.
-                </p>
-              </div>
-            </div>
-
-            <span className="liquid-glass shrink-0 rounded-full px-5 py-2.5 text-xs font-semibold text-foreground transition-colors group-hover:bg-white/15">
-              {uploading ? "Uploading to Canvas…" : "Select Files"}
+      {/* Main Container */}
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        {/* Status / Metric Ribbon */}
+        <section className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <div className="rounded-2xl border border-white/10 bg-neutral-900/50 p-4">
+            <span className="text-[0.68rem] uppercase tracking-wider text-muted-foreground">
+              Total Live Items
             </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="font-display text-2xl font-bold">{items.length}</span>
+              <span className="text-xs text-muted-foreground">on Canvas</span>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-neutral-900/50 p-4">
+            <span className="text-[0.68rem] uppercase tracking-wider text-muted-foreground">
+              Motion Graphic Reels
+            </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="font-display text-2xl font-bold text-amber-400">{videoCount}</span>
+              <span className="text-xs text-muted-foreground">Active MP4s</span>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-neutral-900/50 p-4">
+            <span className="text-[0.68rem] uppercase tracking-wider text-muted-foreground">
+              Artwork & Graphics
+            </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="font-display text-2xl font-bold text-sky-400">{imageCount}</span>
+              <span className="text-xs text-muted-foreground">Designs</span>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-neutral-900/50 p-4">
+            <span className="text-[0.68rem] uppercase tracking-wider text-muted-foreground">
+              Dual-Storage Sync
+            </span>
+            <div className="mt-1 flex items-center gap-1.5 text-xs font-medium text-emerald-400">
+              <Check className="h-4 w-4" />
+              <span>Locked for 20+ Years</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Filter & Search Bar */}
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative w-full max-w-sm">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search projects..."
+              className="w-full rounded-xl border border-white/15 bg-black/40 py-2 pl-9 pr-4 text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-white/40 focus:outline-none"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-xl border border-white/10 bg-black/40 p-1">
+              <button
+                onClick={() => setMediaFilter("all")}
+                className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                  mediaFilter === "all"
+                    ? "bg-white text-black"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                All ({items.length})
+              </button>
+              <button
+                onClick={() => setMediaFilter("video")}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                  mediaFilter === "video"
+                    ? "bg-white text-black"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Video className="h-3 w-3" /> Videos ({videoCount})
+              </button>
+              <button
+                onClick={() => setMediaFilter("image")}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                  mediaFilter === "image"
+                    ? "bg-white text-black"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <ImageIcon className="h-3 w-3" /> Images ({imageCount})
+              </button>
+            </div>
+
+            <button
+              onClick={loadItems}
+              title="Refresh from server"
+              className="rounded-xl border border-white/10 bg-white/5 p-2 text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            </button>
           </div>
         </div>
 
-        {/* Live Synced Interactive Canvas Preview inside CMS */}
-        {showLiveCanvasPreview && !embedded && (
-          <div
-            ref={canvasPreviewSectionRef}
-            className="space-y-3 rounded-[2rem] border border-white/12 bg-white/[0.02] p-4 sm:p-6"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-              <div>
-                <span className="font-mono text-[0.62rem] uppercase tracking-[0.35em] text-emerald-400">
-                  ● Live Synced Workspace
-                </span>
-                <h3 className="mt-0.5 font-display text-lg font-bold">
-                  Interactive Canvas Preview
-                </h3>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleShuffleAllPositions}
-                  className="liquid-glass inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-white/15"
-                >
-                  <Shuffle className="h-3.5 w-3.5" />
-                  <span>Randomize All Positions</span>
-                </button>
-                <Link
-                  to="/"
-                  hash="work"
-                  className="liquid-glass inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium text-foreground transition-colors hover:bg-white/15"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  <span>Full Screen Portfolio</span>
-                </Link>
-              </div>
-            </div>
-            <Showcase embeddedPreview onRequestDeleteItem={requestDeleteItem} />
-          </div>
-        )}
-
-        {/* Filter Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            {(
-              [
-                { id: "all", label: `All (${items.length})`, icon: Layers },
-                { id: "image", label: `Photos (${totalPhotoCards})`, icon: ImageIcon },
-                { id: "video", label: `Videos (${totalVideoCards})`, icon: Film },
-              ] as const
-            ).map((tab) => {
-              const Icon = tab.icon;
-              const active = filterType === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setFilterType(tab.id)}
-                  className={`inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium transition-all ${
-                    active
-                      ? "bg-foreground text-background shadow-sm"
-                      : "liquid-glass text-foreground/80 hover:text-foreground"
-                  }`}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Items Grid */}
-        {loading && items.length === 0 ? (
-          <div className="flex h-64 items-center justify-center rounded-3xl border border-white/10 bg-white/[0.02]">
-            <div className="flex items-center gap-3 text-sm text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              <span>Loading canvas media…</span>
-            </div>
-          </div>
-        ) : filteredItems.length === 0 ? (
-          <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-3xl border border-white/10 bg-white/[0.02] p-8 text-center">
-            <p className="font-display text-lg font-semibold">No media on the canvas yet</p>
-            <p className="max-w-md text-xs text-muted-foreground">
-              Drop or select one or multiple photos and videos above to automatically place them on
-              the canvas.
-            </p>
+        {/* Project Grid */}
+        {filteredItems.length === 0 ? (
+          <div className="rounded-3xl border border-white/10 bg-neutral-900/30 p-12 text-center">
+            <p className="text-sm text-muted-foreground">No projects matching your filter.</p>
           </div>
         ) : (
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredItems.map((item) => {
-              const videoSrc =
-                item.videoUrl || (isVideoSource(item.imageUrl) ? item.imageUrl : undefined);
-              const isVideo = item.mediaType === "video" || Boolean(videoSrc);
-              const isRecentlyMoved = recentlyMovedId === item.id;
-
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+            {filteredItems.map((project) => {
+              const isVid = project.mediaType === "video" || Boolean(project.videoUrl);
               return (
-                <article
-                  key={item.id}
-                  className={`group flex flex-col overflow-hidden rounded-[1.5rem] border bg-neutral-950/90 shadow-[0_20px_50px_-15px_rgba(0,0,0,0.85)] transition-colors ${
-                    isRecentlyMoved
-                      ? "border-emerald-400/80 ring-2 ring-emerald-400/30"
-                      : "border-white/12 hover:border-white/25"
-                  }`}
+                <div
+                  key={project.id}
+                  style={{
+                    contentVisibility: "auto",
+                    containIntrinsicSize: "280px 300px",
+                  }}
+                  className="group relative flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/60 transition-all hover:border-white/25 hover:shadow-xl"
                 >
-                  {/* Media Preview in Natural Aspect Ratio */}
-                  <div className="relative flex min-h-[240px] max-h-[320px] w-full items-center justify-center overflow-hidden bg-black/80 p-3">
-                    {videoSrc ? (
-                      <SilentAutoPlayVideo
-                        src={videoSrc}
-                        poster={
-                          item.imageUrl && !isVideoSource(item.imageUrl) ? item.imageUrl : undefined
-                        }
-                        alt={item.title}
-                        className="max-h-[280px] w-auto max-w-full rounded-xl object-contain"
+                  {/* Thumbnail / Media Preview */}
+                  <div className="relative aspect-[4/3] w-full overflow-hidden bg-black/80">
+                    {isVid ? (
+                      <video
+                        src={project.videoUrl || project.imageUrl}
+                        muted
+                        loop
+                        playsInline
+                        preload="metadata"
+                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                       />
                     ) : (
-                      <MediaImage
-                        src={item.imageUrl}
-                        alt={item.title}
+                      <img
+                        src={project.imageUrl}
+                        alt={project.title}
                         loading="lazy"
-                        maxRenderDimension={600}
-                        className="max-h-[280px] w-auto max-w-full rounded-xl object-contain"
+                        decoding="async"
+                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                       />
                     )}
 
-                    {/* Top-Left Media Badge */}
-                    <div className="absolute left-3 top-3 z-10 flex max-w-[calc(100%-3.5rem)] flex-wrap items-center gap-1.5">
-                      <span className="liquid-glass inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[0.6rem] uppercase tracking-wider text-foreground">
-                        {isVideo ? (
-                          <>
-                            <Volume2 className="h-3 w-3" />
-                            <span>Video</span>
-                          </>
-                        ) : (
-                          <>
-                            <ImageIcon className="h-3 w-3" />
-                            <span>Photo</span>
-                          </>
-                        )}
-                      </span>
-                      <span className="liquid-glass rounded-full px-2.5 py-1 font-mono text-[0.6rem] text-muted-foreground">
-                        {item.width}×{item.height}
-                      </span>
+                    {/* Media Type Badge */}
+                    <div className="absolute left-2.5 top-2.5 z-10 flex items-center gap-1 rounded-md bg-black/75 px-2 py-0.5 text-[0.62rem] font-medium tracking-wide text-white backdrop-blur-md">
+                      {isVid ? (
+                        <>
+                          <Video className="h-3 w-3 text-amber-400" />
+                          <span>Motion Graphic</span>
+                        </>
+                      ) : (
+                        <>
+                          <ImageIcon className="h-3 w-3 text-sky-400" />
+                          <span>Graphic</span>
+                        </>
+                      )}
                     </div>
 
-                    {/* Top-Right Quick Delete Button */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        requestDeleteItem(item);
-                      }}
-                      title="Delete from canvas"
-                      aria-label="Delete item from canvas"
-                      className="liquid-glass absolute right-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded-full text-foreground/80 transition-colors hover:bg-red-500/80 hover:text-white"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {/* Quick Position Readout */}
+                    <div className="absolute bottom-2.5 left-2.5 z-10 rounded-md bg-black/75 px-2 py-0.5 text-[0.62rem] font-mono text-muted-foreground backdrop-blur-md">
+                      X: {project.canvasX} · Y: {project.canvasY}
+                    </div>
                   </div>
 
-                  {/* Clean Card Actions Footer */}
-                  <div className="flex items-center justify-between gap-2 border-t border-white/10 px-4 py-3.5">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRandomizePosition(item);
-                        }}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.05] px-3 py-1 text-[0.68rem] font-medium text-foreground transition-all hover:bg-white/15 active:scale-95"
-                        title="Place at random non-overlapping position"
-                      >
-                        <Shuffle className="h-3 w-3" />
-                        <span>Random Pos</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleLocateItem(item);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.03] px-2.5 py-1 text-[0.68rem] font-medium text-foreground/85 transition-colors hover:bg-white/10 hover:text-foreground"
-                        title="Locate card in live canvas workspace"
-                      >
-                        <Compass className="h-3 w-3" />
-                        <span>Locate</span>
-                      </button>
+                  {/* Info & Metadata */}
+                  <div className="flex flex-1 flex-col justify-between p-3.5">
+                    <div>
+                      <h3 className="line-clamp-1 font-display text-sm font-semibold text-foreground">
+                        {project.title}
+                      </h3>
+                      <div className="mt-1 flex items-center gap-2 text-[0.68rem] text-muted-foreground">
+                        <span>{project.year || "2026"}</span>
+                        <span>•</span>
+                        <span>
+                          {project.width} × {project.height}px
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`hidden font-mono text-[0.6rem] sm:inline ${
-                          isRecentlyMoved
-                            ? "font-semibold text-emerald-400"
-                            : "text-muted-foreground/70"
-                        }`}
-                      >
-                        ({item.canvasX}, {item.canvasY})
-                      </span>
+                    {/* Card Actions */}
+                    <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => openEditModal(project)}
+                          className="rounded-lg border border-white/10 bg-white/5 p-1.5 text-muted-foreground transition-colors hover:border-white/30 hover:text-foreground"
+                          title="Edit project details"
+                        >
+                          <Edit3 className="h-3.5 w-3.5" />
+                        </button>
+
+                        <button
+                          onClick={() => handleNudgeItem(project.id, project.title)}
+                          className="rounded-lg border border-white/10 bg-white/5 p-1.5 text-muted-foreground transition-colors hover:border-white/30 hover:text-foreground"
+                          title="Reposition on canvas"
+                        >
+                          <Shuffle className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
 
                       <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          requestDeleteItem(item);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-full border border-red-500/25 bg-red-500/10 px-2.5 py-1 text-[0.68rem] font-medium text-red-300 transition-colors hover:bg-red-500/25 active:scale-95"
+                        onClick={() => handleDeleteItem(project.id, project.title)}
+                        className="rounded-lg border border-red-500/20 bg-red-500/10 p-1.5 text-red-400 transition-colors hover:bg-red-500/20"
+                        title="Delete from portfolio"
                       >
-                        <Trash2 className="h-3 w-3" />
-                        <span>Delete</span>
+                        <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   </div>
-                </article>
+                </div>
               );
             })}
           </div>
         )}
-      </div>
+      </main>
 
-      {/* Custom Liquid-Glass Delete Confirmation Modal */}
-      {typeof document !== "undefined" &&
-        pendingConfirm &&
-        createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cms-delete-confirm-title"
-            onClick={() => setPendingConfirm(null)}
-            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 px-4 backdrop-blur-md"
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-md rounded-3xl border border-white/15 bg-neutral-950 p-6 text-foreground shadow-[0_30px_90px_rgba(0,0,0,0.95)] sm:p-7"
-            >
-              <div className="flex items-start gap-4">
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-red-500/30 bg-red-500/15 text-red-400">
-                  <AlertTriangle className="h-6 w-6" />
+      {/* ADD ITEM MODAL */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+          <div className="relative w-full max-w-lg rounded-3xl border border-white/15 bg-neutral-900 p-6 shadow-2xl">
+            <h2 className="font-display text-xl font-bold text-foreground">Add Canvas Project</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Upload an image/video or paste a URL. It will automatically be locked into both disk &
+              code.
+            </p>
+
+            <form onSubmit={handleCreateItem} className="mt-5 space-y-4">
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                  Media File (Direct Upload)
+                </label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/*"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/25 bg-black/30 px-4 py-4 text-xs font-medium text-foreground transition-colors hover:border-white/50"
+                >
+                  <UploadCloud className="h-4 w-4 text-emerald-400" />
+                  <span>Choose Image or Video File</span>
+                </button>
+                {uploadProgress && (
+                  <p className="mt-1 text-[0.68rem] text-emerald-400">{uploadProgress}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                  Or Media URL
+                </label>
+                <input
+                  type="text"
+                  value={newMediaUrl}
+                  onChange={(e) => setNewMediaUrl(e.target.value)}
+                  placeholder="https://... (image or video URL)"
+                  className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-white/40 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                    Title
+                  </label>
+                  <input
+                    type="text"
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    placeholder="Project Title"
+                    required
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-white/40 focus:outline-none"
+                  />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="font-mono text-[0.62rem] uppercase tracking-[0.3em] text-red-400">
-                    Confirm Deletion
-                  </p>
-                  <h3
-                    id="cms-delete-confirm-title"
-                    className="mt-1 font-display text-xl font-bold leading-snug text-foreground"
-                  >
-                    {pendingConfirm.type === "clear-all"
-                      ? `Delete all ${pendingConfirm.count} items from the canvas?`
-                      : "Delete this item from the canvas?"}
-                  </h3>
-                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground sm:text-sm">
-                    {pendingConfirm.type === "clear-all"
-                      ? `This will remove all ${pendingConfirm.count} items from the live canvas. You can undo this action afterward.`
-                      : "Are you sure you want to remove this media item from your portfolio canvas?"}
-                  </p>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                    Year
+                  </label>
+                  <input
+                    type="text"
+                    value={newYear}
+                    onChange={(e) => setNewYear(e.target.value)}
+                    placeholder="2026"
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-white/40 focus:outline-none"
+                  />
                 </div>
               </div>
 
-              <div className="mt-6 flex items-center justify-end gap-3 border-t border-white/10 pt-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                    Media Type
+                  </label>
+                  <select
+                    value={newMediaType}
+                    onChange={(e) =>
+                      setNewMediaType(e.target.value === "video" ? "video" : "image")
+                    }
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3 py-2 text-xs text-foreground focus:border-white/40 focus:outline-none"
+                  >
+                    <option value="image">Graphic / Image</option>
+                    <option value="video">Motion Graphic / Video</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                    External Link (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newExternalUrl}
+                    onChange={(e) => setNewExternalUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground placeholder:text-muted-foreground/50 focus:border-white/40 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                    Width (px)
+                  </label>
+                  <input
+                    type="number"
+                    value={newWidth}
+                    onChange={(e) => setNewWidth(Number(e.target.value) || 310)}
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground focus:border-white/40 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                    Height (px)
+                  </label>
+                  <input
+                    type="number"
+                    value={newHeight}
+                    onChange={(e) => setNewHeight(Number(e.target.value) || 310)}
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground focus:border-white/40 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-3 pt-3">
                 <button
                   type="button"
-                  onClick={() => setPendingConfirm(null)}
-                  className="liquid-glass inline-flex h-10 items-center justify-center rounded-full px-5 text-xs font-semibold text-foreground transition-colors hover:bg-white/15"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="rounded-xl border border-white/10 px-4 py-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
                 >
                   Cancel
                 </button>
                 <button
-                  type="button"
-                  onClick={handleConfirmPendingDeletion}
-                  className="inline-flex h-10 items-center gap-1.5 rounded-full bg-red-500 px-5 text-xs font-semibold text-white transition-colors hover:bg-red-600"
+                  type="submit"
+                  disabled={syncing}
+                  className="rounded-xl bg-white px-5 py-2.5 text-xs font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>
-                    {pendingConfirm.type === "clear-all" ? "Yes, Clear All" : "Yes, Delete"}
-                  </span>
+                  {syncing ? "Saving..." : "Add to Canvas"}
                 </button>
               </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT ITEM MODAL */}
+      {editingItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+          <div className="relative w-full max-w-lg rounded-3xl border border-white/15 bg-neutral-900 p-6 shadow-2xl">
+            <h2 className="font-display text-xl font-bold text-foreground">
+              Edit &quot;{editingItem.title}&quot;
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Adjust coordinates, dimensions, or details. Changes sync instantly across the site.
+            </p>
+
+            <form onSubmit={handleSaveEdit} className="mt-5 space-y-4">
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                  Title
+                </label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground focus:border-white/40 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                    Year
+                  </label>
+                  <input
+                    type="text"
+                    value={editYear}
+                    onChange={(e) => setEditYear(e.target.value)}
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground focus:border-white/40 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wider text-muted-foreground">
+                    External Link
+                  </label>
+                  <input
+                    type="text"
+                    value={editExternalUrl}
+                    onChange={(e) => setEditExternalUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2 text-xs text-foreground focus:border-white/40 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+                <span className="mb-2 block text-[0.68rem] font-semibold uppercase tracking-wider text-emerald-400">
+                  Canvas Position & Geometry
+                </span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-[0.65rem] text-muted-foreground">
+                      Canvas X
+                    </label>
+                    <input
+                      type="number"
+                      value={editCanvasX}
+                      onChange={(e) => setEditCanvasX(Number(e.target.value) || 0)}
+                      className="w-full rounded-lg border border-white/15 bg-neutral-900 px-3 py-1.5 text-xs text-foreground"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[0.65rem] text-muted-foreground">
+                      Canvas Y
+                    </label>
+                    <input
+                      type="number"
+                      value={editCanvasY}
+                      onChange={(e) => setEditCanvasY(Number(e.target.value) || 0)}
+                      className="w-full rounded-lg border border-white/15 bg-neutral-900 px-3 py-1.5 text-xs text-foreground"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[0.65rem] text-muted-foreground">
+                      Width (px)
+                    </label>
+                    <input
+                      type="number"
+                      value={editWidth}
+                      onChange={(e) => setEditWidth(Number(e.target.value) || 310)}
+                      className="w-full rounded-lg border border-white/15 bg-neutral-900 px-3 py-1.5 text-xs text-foreground"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[0.65rem] text-muted-foreground">
+                      Height (px)
+                    </label>
+                    <input
+                      type="number"
+                      value={editHeight}
+                      onChange={(e) => setEditHeight(Number(e.target.value) || 310)}
+                      className="w-full rounded-lg border border-white/15 bg-neutral-900 px-3 py-1.5 text-xs text-foreground"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setEditingItem(null)}
+                  className="rounded-xl border border-white/10 px-4 py-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={syncing}
+                  className="rounded-xl bg-white px-5 py-2.5 text-xs font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {syncing ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

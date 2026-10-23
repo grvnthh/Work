@@ -72,8 +72,11 @@ export interface CanvasCmsStoreData {
   updatedAt: string;
 }
 
-const DATA_DIR = path.resolve(process.cwd(), "data");
-const CANVAS_CMS_FILE = path.join(DATA_DIR, "canvas-cms.json");
+function getCanvasCmsPaths() {
+  const dataDir = path.resolve(process.cwd(), "data");
+  const canvasCmsFile = path.join(dataDir, "canvas-cms.json");
+  return { dataDir, canvasCmsFile };
+}
 
 const globalCmsState = globalThis as unknown as {
   __GRVNTH_CMS_STORE__?: CanvasCmsStoreData;
@@ -81,8 +84,9 @@ const globalCmsState = globalThis as unknown as {
 
 function readCanvasCmsStore(): CanvasCmsStoreData {
   try {
-    if (fs.existsSync(CANVAS_CMS_FILE)) {
-      const raw = fs.readFileSync(CANVAS_CMS_FILE, "utf-8");
+    const { canvasCmsFile } = getCanvasCmsPaths();
+    if (fs.existsSync(canvasCmsFile)) {
+      const raw = fs.readFileSync(canvasCmsFile, "utf-8");
       const parsed = JSON.parse(raw) as Partial<CanvasCmsStoreData>;
       const normalized: CanvasCmsStoreData = {
         addedItems: Array.isArray(parsed.addedItems) ? parsed.addedItems : [],
@@ -112,10 +116,11 @@ function writeCanvasCmsStore(store: CanvasCmsStoreData): CanvasCmsStoreData {
   store.updatedAt = new Date().toISOString();
   globalCmsState.__GRVNTH_CMS_STORE__ = store;
   try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+    const { dataDir, canvasCmsFile } = getCanvasCmsPaths();
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
     }
-    fs.writeFileSync(CANVAS_CMS_FILE, JSON.stringify(store, null, 2), "utf-8");
+    fs.writeFileSync(canvasCmsFile, JSON.stringify(store, null, 2), "utf-8");
   } catch (err) {
     console.warn("[Canvas CMS] Memory fallback active (disk write skipped):", err);
   }
@@ -159,8 +164,13 @@ function buildResolvedCanvasItems(explicitStore?: CanvasCmsStoreData): {
     resolvedAdded.push(merged);
   }
 
+  const itemsToReturn =
+    resolvedAdded.length > 0
+      ? resolvedAdded
+      : PORTFOLIO_CANVAS_PROJECTS.filter((p) => !deletedSet.has(p.id));
+
   return {
-    items: resolvedAdded,
+    items: itemsToReturn,
     deletedDefaultCount: 0,
     updatedAt: store.updatedAt,
   };

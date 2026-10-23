@@ -5,8 +5,8 @@ import { routeTree } from "@/routeTree.gen";
 
 const BASE_URL = "https://grvnth.lovable.app";
 
-// Routes to exclude from the sitemap (non-indexable / admin / utility routes).
-const EXCLUDE = new Set<string>(["/sitemap.xml", "/auth", "/dashboard", "/_authenticated"]);
+// Routes to exclude from the sitemap (non-indexable / utility routes).
+const EXCLUDE = new Set<string>(["/sitemap.xml", "/dashboard", "/auth"]);
 
 // Per-path priority/changefreq hints. Anything not listed uses defaults.
 const HINTS: Record<string, { changefreq: string; priority: string }> = {

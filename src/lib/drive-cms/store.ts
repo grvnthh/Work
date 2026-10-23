@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CmsStoreData, DriveSyncState } from "./types";
 
-const DATA_DIR = path.resolve(process.cwd(), "data");
-const STORE_FILE = path.join(DATA_DIR, "portfolio-cms.json");
+function getStorePaths() {
+  const dataDir = path.resolve(process.cwd(), "data");
+  const storeFile = path.join(dataDir, "portfolio-cms.json");
+  return { dataDir, storeFile };
+}
 
 const defaultSyncState: DriveSyncState = {
   connected: false,
@@ -25,19 +28,21 @@ const defaultData: CmsStoreData = {
 };
 
 function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  const { dataDir } = getStorePaths();
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
   }
 }
 
 export function getCmsData(): CmsStoreData {
   try {
     ensureDataDir();
-    if (!fs.existsSync(STORE_FILE)) {
+    const { storeFile } = getStorePaths();
+    if (!fs.existsSync(storeFile)) {
       saveCmsData(defaultData);
       return defaultData;
     }
-    const raw = fs.readFileSync(STORE_FILE, "utf-8");
+    const raw = fs.readFileSync(storeFile, "utf-8");
     const parsed = JSON.parse(raw) as Partial<CmsStoreData>;
     return {
       syncState: {
@@ -56,9 +61,10 @@ export function getCmsData(): CmsStoreData {
 export function saveCmsData(data: CmsStoreData): void {
   try {
     ensureDataDir();
-    const tempFile = `${STORE_FILE}.${Date.now()}.tmp`;
+    const { storeFile } = getStorePaths();
+    const tempFile = `${storeFile}.${Date.now()}.tmp`;
     fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), "utf-8");
-    fs.renameSync(tempFile, STORE_FILE);
+    fs.renameSync(tempFile, storeFile);
   } catch (error) {
     console.error("[Drive CMS] Error saving store file:", error);
   }
