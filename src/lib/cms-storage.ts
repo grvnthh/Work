@@ -765,10 +765,17 @@ async function uploadMediaBlobToSupabaseCloud(key: string, blob: Blob): Promise<
   return null;
 }
 
-export async function getCloudSignedUrlForMediaKey(key: string): Promise<string | null> {
+export async function getCloudSignedUrlForMediaKey(
+  key: string,
+  forceRefresh = false,
+): Promise<string | null> {
   if (!key) return null;
-  const cachedSigned = cloudSignedUrlCache.get(key);
-  if (cachedSigned) return cachedSigned;
+  if (!forceRefresh) {
+    const cachedSigned = cloudSignedUrlCache.get(key);
+    if (cachedSigned) return cachedSigned;
+  } else {
+    cloudSignedUrlCache.delete(key);
+  }
   try {
     const signedUrl = await createSupabaseSignedUrlRest(`inquiries/${key}`, TEN_YEARS_SECONDS);
     if (signedUrl) {
@@ -802,7 +809,7 @@ export async function getMediaObjectUrlFromIdb(
   }
 
   // Fallback for visitors or new browser sessions: resolve 10-year signed URL directly from Supabase Storage
-  const cloudSignedUrl = await getCloudSignedUrlForMediaKey(key);
+  const cloudSignedUrl = await getCloudSignedUrlForMediaKey(key, forceRefresh);
   if (cloudSignedUrl) {
     objectUrlCache.set(key, cloudSignedUrl);
     return cloudSignedUrl;

@@ -7,6 +7,14 @@ export function Footer() {
         </div>
         <div className="flex flex-wrap items-center justify-center gap-5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
           <a
+            href="https://shop.grvnth.xyz"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="transition-colors hover:text-foreground"
+          >
+            Shop
+          </a>
+          <a
             href="https://instagram.com/_grvnth_"
             target="_blank"
             rel="noopener noreferrer"

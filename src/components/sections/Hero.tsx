@@ -1,4 +1,5 @@
 import { motion, useMotionValue, useScroll, useSpring, useTransform } from "framer-motion";
+import { ArrowDown, ArrowUpRight, Mail, ShoppingBag, Sparkles } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Magnetic, Reveal } from "../Reveal";
 
@@ -45,7 +46,7 @@ export function Hero() {
     <section
       id="top"
       ref={ref}
-      className="relative flex min-h-[100svh] items-center justify-center overflow-hidden px-5 pt-32 sm:pt-40"
+      className="relative flex min-h-[100svh] items-center justify-center overflow-hidden px-5 pt-28 pb-20 sm:pt-36 sm:pb-28"
     >
       {/* floating glass shapes with pointer + scroll parallax (separated from CSS keyframe transform) */}
       <motion.div
@@ -130,29 +131,56 @@ export function Hero() {
         </Reveal>
 
         <Reveal delay={1.1}>
-          <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4">
-            <Magnetic strength={0.3}>
-              <motion.a
-                href="#work"
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
-                className="group relative inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-full bg-foreground px-7 py-4 text-sm font-semibold text-background sm:w-auto"
-              >
-                <span className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-black/25 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
-                <span className="relative">Explore Work</span>
-              </motion.a>
-            </Magnetic>
-            <Magnetic strength={0.3}>
-              <motion.a
-                href="#contact"
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
-                className="glass-strong group relative inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-full px-7 py-4 text-sm font-semibold text-foreground sm:w-auto"
-              >
-                <span className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/15 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
-                <span className="relative">Contact Me</span>
-              </motion.a>
-            </Magnetic>
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:mt-10 sm:gap-3.5">
+            {/* Upper Two: Matching Glass Style */}
+            <div className="flex flex-wrap items-center justify-center gap-2.5 sm:gap-3.5">
+              <Magnetic strength={0.3}>
+                <motion.a
+                  href="#work"
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.96 }}
+                  className="glass-strong group relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-full border border-white/20 bg-white/[0.06] px-5 py-3 text-xs font-semibold tracking-wide text-foreground shadow-[0_0_25px_-5px_rgba(255,255,255,0.12)] transition-all duration-300 hover:border-white/40 hover:bg-white/[0.12] hover:shadow-[0_0_35px_-5px_rgba(255,255,255,0.22)] sm:px-7 sm:py-3.5 sm:text-sm"
+                >
+                  <span className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
+                  <Sparkles className="relative h-3.5 w-3.5 text-foreground/80 transition-transform duration-300 group-hover:scale-110 sm:h-4 sm:w-4" />
+                  <span className="relative">Explore Work</span>
+                  <ArrowDown className="relative h-3.5 w-3.5 text-muted-foreground transition-transform duration-300 group-hover:translate-y-0.5 group-hover:text-foreground sm:h-4 sm:w-4" />
+                </motion.a>
+              </Magnetic>
+
+              <Magnetic strength={0.3}>
+                <motion.a
+                  href="https://shop.grvnth.xyz"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.96 }}
+                  className="glass-strong group relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-full border border-white/20 bg-white/[0.06] px-5 py-3 text-xs font-semibold tracking-wide text-foreground shadow-[0_0_25px_-5px_rgba(255,255,255,0.12)] transition-all duration-300 hover:border-white/40 hover:bg-white/[0.12] hover:shadow-[0_0_35px_-5px_rgba(255,255,255,0.22)] sm:px-7 sm:py-3.5 sm:text-sm"
+                >
+                  <span className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
+                  <ShoppingBag className="relative h-3.5 w-3.5 text-foreground/80 transition-transform duration-300 group-hover:scale-110 sm:h-4 sm:w-4" />
+                  <span className="relative">Visit Shop</span>
+                  <ArrowUpRight className="relative h-3.5 w-3.5 text-muted-foreground transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground sm:h-4 sm:w-4" />
+                </motion.a>
+              </Magnetic>
+            </div>
+
+            {/* Below One: Solid White Style */}
+            <div className="flex items-center justify-center">
+              <Magnetic strength={0.3}>
+                <motion.a
+                  href="#contact"
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.96 }}
+                  className="group relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-full bg-foreground px-7 py-3 text-xs font-semibold tracking-wide text-background shadow-[0_0_30px_-5px_rgba(255,255,255,0.35)] transition-all duration-300 hover:bg-foreground/90 hover:shadow-[0_0_40px_-3px_rgba(255,255,255,0.5)] sm:px-8 sm:py-3.5 sm:text-sm"
+                >
+                  <span className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-black/20 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
+                  <Mail className="relative h-3.5 w-3.5 text-background transition-transform duration-300 group-hover:scale-110 sm:h-4 sm:w-4" />
+                  <span className="relative">Contact Me</span>
+                  <ArrowUpRight className="relative h-3.5 w-3.5 text-background/70 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-background sm:h-4 sm:w-4" />
+                </motion.a>
+              </Magnetic>
+            </div>
           </div>
         </Reveal>
       </motion.div>
@@ -164,7 +192,7 @@ export function Hero() {
           opacity: { delay: 1.8, duration: 1 },
           y: { duration: 2.4, repeat: Infinity, ease: "easeInOut" },
         }}
-        className="absolute bottom-6 left-1/2 flex -translate-x-1/2 flex-col items-center gap-2 text-[0.6rem] uppercase tracking-[0.4em] text-muted-foreground"
+        className="absolute bottom-4 left-1/2 hidden -translate-x-1/2 flex-col items-center gap-2 text-[0.6rem] uppercase tracking-[0.4em] text-muted-foreground md:flex [@media(max-height:720px)]:hidden"
       >
         <span>Scroll</span>
         <span className="h-8 w-px bg-gradient-to-b from-foreground/60 to-transparent" />

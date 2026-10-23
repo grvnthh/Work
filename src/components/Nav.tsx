@@ -83,25 +83,12 @@ export function Nav() {
           })}
         </nav>
         <div className="flex shrink-0 items-center gap-2">
-          <Magnetic strength={0.25}>
-            <motion.a
-              href="https://granthagrawal.gumroad.com/"
-              target="_blank"
-              rel="noopener noreferrer"
-              whileHover={{ scale: 1.04 }}
-              whileTap={{ scale: 0.96 }}
-              className="inline-flex items-center rounded-full border border-border px-3 py-2 text-[0.62rem] font-semibold uppercase text-foreground sm:px-4 sm:text-[0.7rem]"
-            >
-              <span className="sm:hidden">Shop</span>
-              <span className="hidden sm:inline">Buy products</span>
-            </motion.a>
-          </Magnetic>
           <Magnetic strength={0.35}>
             <motion.a
               href="#contact"
               whileHover={{ scale: 1.04 }}
               whileTap={{ scale: 0.96 }}
-              className="group relative inline-flex items-center gap-1.5 overflow-hidden rounded-full bg-foreground px-3 py-2 text-[0.62rem] font-semibold uppercase text-background sm:px-4 sm:text-[0.7rem]"
+              className="group relative inline-flex items-center gap-1.5 overflow-hidden rounded-full bg-foreground px-3.5 py-2 text-[0.62rem] font-semibold uppercase text-background sm:px-4 sm:text-[0.7rem]"
             >
               <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-black/30 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
               <span className="relative">Let's Talk</span>
