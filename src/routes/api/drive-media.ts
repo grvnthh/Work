@@ -46,7 +46,7 @@ function safeDecodeURIComponent(val: string): string {
   }
 }
 
-const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v6-";
+const CMS_SNAPSHOT_PREFIX = "cms-showcase-store-v8-";
 const SUPABASE_FALLBACK_URL = "https://jnolhqtsuyfckytngssa.supabase.co";
 const SUPABASE_FALLBACK_KEY = "sb_publishable_UtllKtAciWXasnSJ1VY35g_P5tiVA9W";
 const SUPABASE_BUCKET = "contact-attachments";
@@ -151,7 +151,7 @@ async function getSupabaseStorageSignedUrl(
 }
 
 function extractSnapshotTimestamp(name: string): number {
-  const match = name.match(/cms-canvas-store-v\d+-0*(\d+)/);
+  const match = name.match(/cms-(?:canvas|showcase)-store-v\d+-0*(\d+)/);
   if (match?.[1]) {
     const parsed = parseInt(match[1], 10);
     if (!Number.isNaN(parsed)) return parsed;
@@ -991,9 +991,64 @@ export const Route = createFileRoute("/api/drive-media")({
               ? path.basename(requestedLocalKey)
               : `cms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${safeSlug}${safeExt}`;
             const resolvedMime = fileType || getMimeTypeFromExt(safeExt);
+            const targetFilePath = path.join(cmsMediaDir, uniqueName);
+
+            if (isChunked) {
+              const chunkIndex = parseInt(chunkIndexParam!, 10);
+              const totalChunks = parseInt(totalChunksParam!, 10);
+              await saveStreamOrBuffer(
+                request.body,
+                [targetFilePath],
+                uniqueName,
+                resolvedMime,
+                uniqueName,
+                chunkIndex > 0,
+              );
+
+              if (chunkIndex < totalChunks - 1) {
+                return Response.json({
+                  partial: true,
+                  chunkIndex,
+                  totalChunks,
+                  filename: uniqueName,
+                });
+              }
+
+              let cloudSignedUrl: string | null = null;
+              try {
+                if (fs.existsSync(targetFilePath)) {
+                  const stat = fs.statSync(targetFilePath);
+                  if (stat.size > 0 && stat.size <= 50 * 1024 * 1024) {
+                    const fullBuf = fs.readFileSync(targetFilePath);
+                    cloudSignedUrl = await uploadBufferToSupabaseStorage(
+                      "cms",
+                      uniqueName,
+                      fullBuf,
+                      resolvedMime,
+                    );
+                  }
+                }
+              } catch {
+                // Ignore optional cloud upload error for large files
+              }
+
+              return Response.json({
+                files: [
+                  {
+                    filename: uniqueName,
+                    url:
+                      cloudSignedUrl || `/api/drive-media?local=${encodeURIComponent(uniqueName)}`,
+                    mediaType: isVideo ? "video" : "image",
+                    mimeType: resolvedMime,
+                    title: cleanTitle,
+                  },
+                ],
+              });
+            }
+
             const savedCmsBuffer = await saveStreamOrBuffer(
               request.body,
-              [path.join(cmsMediaDir, uniqueName)],
+              [targetFilePath],
               uniqueName,
               resolvedMime,
               uniqueName,

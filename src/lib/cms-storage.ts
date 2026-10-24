@@ -36,13 +36,13 @@ export interface UploadedMediaDescriptor {
   height: number;
 }
 
-const LOCAL_STORAGE_KEY = "grvnth_canvas_cms_store_v6";
-const CLOUD_UPLOADED_KEYS_STORAGE_KEY = "grvnth_cms_uploaded_cloud_keys_v1";
-const BROADCAST_CHANNEL_NAME = "grvnth_canvas_cms_channel";
-const IDB_NAME = "grvnth_cms_media_idb";
+const LOCAL_STORAGE_KEY = "grvnth_showcase_cms_store_v8";
+const CLOUD_UPLOADED_KEYS_STORAGE_KEY = "grvnth_cms_uploaded_cloud_keys_v8";
+const BROADCAST_CHANNEL_NAME = "grvnth_showcase_cms_channel_v8";
+const IDB_NAME = "grvnth_showcase_media_idb_v8";
 const IDB_STORE = "media_files";
-const IDB_STORE_BACKUP_KEY = "__cms_store_v6__";
-const CMS_SNAPSHOT_PREFIX = "cms-canvas-store-v6-";
+const IDB_STORE_BACKUP_KEY = "__cms_store_v8__";
+const CMS_SNAPSHOT_PREFIX = "cms-showcase-store-v8-";
 const SUPABASE_FALLBACK_URL = "https://jnolhqtsuyfckytngssa.supabase.co";
 const SUPABASE_FALLBACK_KEY = "sb_publishable_UtllKtAciWXasnSJ1VY35g_P5tiVA9W";
 const SUPABASE_BUCKET = "contact-attachments";
@@ -157,7 +157,7 @@ async function createSupabaseSignedUrlRest(
 }
 
 function extractSnapshotTimestamp(name: string): number {
-  const match = name.match(/cms-canvas-store-v\d+-0*(\d+)/);
+  const match = name.match(/cms-(?:canvas|showcase)-store-v\d+-0*(\d+)/);
   if (match?.[1]) {
     const parsed = parseInt(match[1], 10);
     if (!Number.isNaN(parsed)) return parsed;
@@ -1083,101 +1083,7 @@ function scheduleBackgroundMediaHealing(store: CanvasCmsStoreData): void {
 async function recoverOrphanedIdbMediaIfStoreEmpty(
   store: CanvasCmsStoreData,
 ): Promise<{ store: CanvasCmsStoreData; recovered: boolean }> {
-  const storeTime = new Date(store.updatedAt || 0).getTime();
-  if (storeTime > 0 || store.addedItems.length > 0 || store.deletedIds.length > 0) {
-    return { store, recovered: false };
-  }
-
-  const db = await openMediaIdb();
-  if (!db) return { store, recovered: false };
-
-  const cmsEntries = await new Promise<Array<{ key: string; blob: Blob }>>((resolve) => {
-    try {
-      const tx = db.transaction(IDB_STORE, "readonly");
-      const objStore = tx.objectStore(IDB_STORE);
-      const keysReq = objStore.getAllKeys();
-      keysReq.onsuccess = () => {
-        const allKeys = (keysReq.result ?? [])
-          .map((k) => String(k))
-          .filter((k) => k.startsWith("cms-"));
-        if (allKeys.length === 0) {
-          resolve([]);
-          return;
-        }
-        const collected: Array<{ key: string; blob: Blob }> = [];
-        let remaining = allKeys.length;
-        for (const k of allKeys) {
-          const getReq = objStore.get(k);
-          getReq.onsuccess = () => {
-            if (getReq.result instanceof Blob && getReq.result.size > 0) {
-              collected.push({ key: k, blob: getReq.result });
-            }
-            remaining -= 1;
-            if (remaining === 0) resolve(collected);
-          };
-          getReq.onerror = () => {
-            remaining -= 1;
-            if (remaining === 0) resolve(collected);
-          };
-        }
-      };
-      keysReq.onerror = () => resolve([]);
-    } catch {
-      resolve([]);
-    }
-  });
-
-  if (cmsEntries.length === 0) {
-    return { store, recovered: false };
-  }
-
-  // Deduplicate by filename suffix so we don't create duplicate items for the same file
-  const uniqueBySuffix = new Map<string, { key: string; blob: Blob }>();
-  for (const entry of cmsEntries) {
-    const suffix = getCmsKeySuffix(entry.key) || entry.key;
-    uniqueBySuffix.set(suffix, entry);
-  }
-
-  const nextStore = cloneStore(store);
-  const occupiedRects: CanvasRect[] = [];
-
-  for (const { key, blob } of uniqueBySuffix.values()) {
-    const objUrl = URL.createObjectURL(blob);
-    objectUrlCache.set(key, objUrl);
-
-    const ext = key.split(".").pop()?.toLowerCase() ?? "";
-    const isVideo =
-      blob.type.startsWith("video/") ||
-      ["mp4", "webm", "mov", "m4v", "mkv", "avi", "ogg", "ogv"].includes(ext);
-    const width = isVideo ? 270 : 310;
-    const height = isVideo ? 380 : 310;
-    const pos = findDistinctRandomCanvasPosition(occupiedRects, width, height, undefined, true);
-    occupiedRects.push({ canvasX: pos.canvasX, canvasY: pos.canvasY, width, height });
-
-    const finalUrl =
-      cloudSignedUrlCache.get(key) || `/api/drive-media?local=${encodeURIComponent(key)}`;
-    const rawSlug = getCmsKeySuffix(key).replace(/\.[^.]+$/, "");
-    const title =
-      rawSlug.replace(/[-_]+/g, " ").trim() || (isVideo ? "Studio Video" : "Studio Artwork");
-
-    nextStore.addedItems.push({
-      id: `item-${key}`,
-      title,
-      description: "",
-      year: new Date().getFullYear().toString(),
-      mediaType: isVideo ? "video" : "image",
-      imageUrl: finalUrl,
-      videoUrl: isVideo ? finalUrl : undefined,
-      canvasX: pos.canvasX,
-      canvasY: pos.canvasY,
-      width,
-      height,
-    });
-  }
-
-  nextStore.updatedAt = new Date().toISOString();
-  settleStoreNonOverlappingPositions(nextStore);
-  return { store: nextStore, recovered: true };
+  return { store, recovered: false };
 }
 
 export function reportUnavailableCmsMedia(_failedUrl?: string | null): void {
@@ -1186,7 +1092,7 @@ export function reportUnavailableCmsMedia(_failedUrl?: string | null): void {
 
 /**
  * Measures natural aspect ratio of a File (image or video) in the browser
- * and returns canvas-ready dimensions preserving 100% original aspect ratio.
+ * and returns dimensions preserving 100% original aspect ratio.
  */
 export async function measureFileCanvasDimensions(
   file: File,
@@ -1202,7 +1108,7 @@ export async function measureFileCanvasDimensions(
     const dims = await new Promise<{ width: number; height: number }>((resolve) => {
       const timeout = window.setTimeout(() => {
         resolve(isVideo ? { width: 270, height: 380 } : { width: 310, height: 310 });
-      }, 4000);
+      }, 1500);
 
       if (isVideo) {
         const tempVideo = document.createElement("video");
@@ -1262,7 +1168,7 @@ export async function measureUrlCanvasDimensions(
   return new Promise((resolve) => {
     const timeout = window.setTimeout(() => {
       resolve(mediaType === "video" ? { width: 270, height: 380 } : { width: 310, height: 310 });
-    }, 4000);
+    }, 2000);
 
     if (mediaType === "video") {
       const tempVideo = document.createElement("video");
@@ -1305,14 +1211,85 @@ export async function measureUrlCanvasDimensions(
   });
 }
 
+const STREAM_CHUNK_SIZE_BYTES = 24 * 1024 * 1024; // 24 MB zero-copy slices
+
+async function streamFileToServerWithChunks(
+  file: File,
+  localKey: string,
+  onProgress?: (percent: number, statusText: string) => void,
+): Promise<string | null> {
+  const totalBytes = file.size;
+  if (totalBytes <= STREAM_CHUNK_SIZE_BYTES) {
+    onProgress?.(25, `Streaming ${file.name}...`);
+    const res = await fetch(
+      `/api/drive-media?filename=${encodeURIComponent(file.name)}&localKey=${encodeURIComponent(localKey)}`,
+      {
+        method: "POST",
+        headers: {
+          "x-file-name": encodeURIComponent(file.name),
+          "x-file-type": file.type || "application/octet-stream",
+        },
+        body: file,
+      },
+    );
+    onProgress?.(100, `Uploaded ${file.name}`);
+    if (res.ok) {
+      const data = (await res.json().catch(() => null)) as {
+        files?: Array<{ url?: string }>;
+      } | null;
+      return data?.files?.[0]?.url ?? null;
+    }
+    return null;
+  }
+
+  const totalChunks = Math.ceil(totalBytes / STREAM_CHUNK_SIZE_BYTES);
+  const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  let finalServerUrl: string | null = null;
+
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+    const start = chunkIndex * STREAM_CHUNK_SIZE_BYTES;
+    const end = Math.min(totalBytes, start + STREAM_CHUNK_SIZE_BYTES);
+    const chunkBlob = file.slice(start, end, file.type || "application/octet-stream");
+    const pct = Math.min(99, Math.round(((chunkIndex + 0.5) / totalChunks) * 100));
+    onProgress?.(pct, `Streaming ${file.name} (${pct}%)...`);
+
+    const res = await fetch(
+      `/api/drive-media?filename=${encodeURIComponent(file.name)}&localKey=${encodeURIComponent(localKey)}&uploadId=${encodeURIComponent(uploadId)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`,
+      {
+        method: "POST",
+        headers: {
+          "x-file-name": encodeURIComponent(file.name),
+          "x-file-type": file.type || "application/octet-stream",
+        },
+        body: chunkBlob,
+      },
+    );
+
+    if (res.ok && chunkIndex === totalChunks - 1) {
+      const data = (await res.json().catch(() => null)) as {
+        files?: Array<{ url?: string }>;
+      } | null;
+      finalServerUrl = data?.files?.[0]?.url ?? null;
+    }
+  }
+
+  onProgress?.(100, `Completed ${file.name}`);
+  return finalServerUrl;
+}
+
 /**
- * Uploads one or more image/video files to IndexedDB + /api/drive-media + Supabase Cloud.
- * Immediately caches the blob in IndexedDB + objectUrlCache so the CMS & Portfolio render
- * in 0ms, and bounds blocking upload wait to 3.5s per file (continuing in background if larger).
+ * Instant zero-lag uploader for images and videos of any size (even 10-hour videos):
+ * 1. Registers a zero-copy native `URL.createObjectURL(file)` in `objectUrlCache` in 0ms
+ *    so the Showcase and CMS autoplay the video or render the image immediately with 0 RAM overhead.
+ * 2. Persists to IndexedDB asynchronously and streams 24 MB slices to `/api/drive-media` + Supabase Cloud.
  */
-export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMediaDescriptor[]> {
+export async function uploadMediaFilesToCms(
+  files: File[],
+  onProgress?: (percent: number, statusText: string) => void,
+): Promise<UploadedMediaDescriptor[]> {
   if (files.length === 0) return [];
 
+  onProgress?.(5, "Reading media dimensions...");
   const measuredList = await Promise.all(files.map((file) => measureFileCanvasDimensions(file)));
   const results: UploadedMediaDescriptor[] = [];
 
@@ -1340,37 +1317,45 @@ export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMedi
 
     const localKey = `cms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${safeSlug}.${safeExt}`;
 
-    // 1. Immediately cache the binary file in IndexedDB + objectUrlCache for instant zero-latency rendering
-    await saveMediaBlobToIdb(localKey, file);
+    // 1. Zero-copy 0ms local object URL registration so even a 10-hour video autoplays immediately
+    const instantMemUrl = URL.createObjectURL(file);
+    objectUrlCache.set(localKey, instantMemUrl);
 
-    // 2. Start server upload + Supabase Cloud upload in background
-    void fetch(
-      `/api/drive-media?filename=${encodeURIComponent(file.name)}&localKey=${encodeURIComponent(localKey)}`,
-      {
-        method: "POST",
-        headers: {
-          "x-file-name": encodeURIComponent(file.name),
-          "x-file-type": file.type || "application/octet-stream",
-        },
-        body: file,
-      },
-    ).catch(() => {});
+    // 2. Persist binary File in IndexedDB asynchronously without blocking UI
+    void saveMediaBlobToIdb(localKey, file).catch(() => {});
 
-    const cloudUploadPromise = uploadMediaBlobToSupabaseCloud(localKey, file).then((signedUrl) => {
-      if (signedUrl) {
-        applyUpgradedMediaUrlsToStore({ [localKey]: signedUrl });
-      }
-      return signedUrl;
-    });
+    // 3. Stream to server (chunked for large files) + Supabase Cloud in background
+    const serverUploadPromise = streamFileToServerWithChunks(file, localKey, onProgress)
+      .then((serverUrl) => {
+        if (serverUrl && serverUrl.startsWith("https://")) {
+          applyUpgradedMediaUrlsToStore({ [localKey]: serverUrl });
+        }
+        return serverUrl;
+      })
+      .catch(() => null);
 
-    // Wait up to 3.5s for the cloud URL; if larger/slower, return immediately with localKey (already in objectUrlCache)
-    // and let cloudUploadPromise upgrade the URL in-place when finished.
-    const cloudSignedUrl = await Promise.race([
-      cloudUploadPromise.catch(() => null),
-      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 3500)),
-    ]);
+    const cloudUploadPromise =
+      file.size <= 50 * 1024 * 1024
+        ? uploadMediaBlobToSupabaseCloud(localKey, file).then((signedUrl) => {
+            if (signedUrl) {
+              applyUpgradedMediaUrlsToStore({ [localKey]: signedUrl });
+            }
+            return signedUrl;
+          })
+        : Promise.resolve(null);
 
-    const finalUrl = cloudSignedUrl || `/api/drive-media?local=${encodeURIComponent(localKey)}`;
+    // For small files (<= 15 MB), wait up to 1.2s for direct cloud URL; for larger files, return in 0ms
+    // so large/10-hour videos appear and autoplay on the Showcase immediately while streaming in background.
+    const fastResolvedUrl =
+      file.size <= 15 * 1024 * 1024
+        ? await Promise.race([
+            cloudUploadPromise.catch(() => null),
+            serverUploadPromise.catch(() => null),
+            new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 1200)),
+          ])
+        : null;
+
+    const finalUrl = fastResolvedUrl || `/api/drive-media?local=${encodeURIComponent(localKey)}`;
 
     results.push({
       url: finalUrl,
@@ -1381,6 +1366,7 @@ export async function uploadMediaFilesToCms(files: File[]): Promise<UploadedMedi
     });
   }
 
+  onProgress?.(100, "Ready!");
   return results;
 }
 
@@ -2271,6 +2257,33 @@ export function mutateClearAllCanvasItems(): ResolvedCanvasCmsState {
   store.overrides = {};
   store.deletedIds = Array.from(deletedSet);
   delete store.lastFocusedId;
+  const saved = writeLocalCmsStore(store);
+  void pushStoreToServer(saved, true);
+  return buildResolvedCanvasItemsFromStore(saved);
+}
+
+export function mutateReorderCanvasItems(orderedIds: string[]): ResolvedCanvasCmsState {
+  const store = readLocalCmsStore();
+  pushUndoSnapshot(store);
+
+  const byId = new Map<string, PortfolioCanvasProject>();
+  for (const item of store.addedItems) {
+    byId.set(item.id, item);
+  }
+
+  const reordered: PortfolioCanvasProject[] = [];
+  for (const id of orderedIds) {
+    const found = byId.get(id);
+    if (found) {
+      reordered.push(found);
+      byId.delete(id);
+    }
+  }
+  for (const remaining of byId.values()) {
+    reordered.push(remaining);
+  }
+
+  store.addedItems = reordered;
   const saved = writeLocalCmsStore(store);
   void pushStoreToServer(saved, true);
   return buildResolvedCanvasItemsFromStore(saved);

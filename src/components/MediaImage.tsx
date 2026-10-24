@@ -43,7 +43,7 @@ const AVAILABLE_THUMB_FILES = new Set([
 let sharedVideoObserver: IntersectionObserver | null = null;
 const observedVideos = new WeakSet<HTMLVideoElement>();
 const activePlayingVideos = new Set<HTMLVideoElement>();
-const MAX_CONCURRENT_CANVAS_VIDEOS = 2;
+const MAX_CONCURRENT_CANVAS_VIDEOS = 12;
 let canvasVideosSuspended = false;
 
 export function setCanvasVideosSuspended(suspended: boolean): void {
@@ -101,8 +101,10 @@ function getSharedVideoObserver(): IntersectionObserver | null {
         for (const entry of entries) {
           const video = entry.target as HTMLVideoElement;
           if (entry.isIntersecting) {
-            video.defaultMuted = true;
-            video.muted = true;
+            if (video.dataset.soundEnabled !== "true") {
+              video.defaultMuted = true;
+              video.muted = true;
+            }
             if (canvasVideosSuspended) {
               if (!video.paused) {
                 video.pause();
@@ -238,11 +240,13 @@ export interface SilentAutoPlayVideoProps extends Omit<
   poster?: string;
   alt?: string;
   pausedPreview?: boolean;
+  soundEnabled?: boolean;
   onVideoError?: () => void;
 }
 
 /**
- * Renders an HTML5 video that automatically plays silently in a loop when visible in viewport.
+ * Renders an HTML5 video that automatically plays in a loop when visible in viewport,
+ * with optional inline sound toggle.
  */
 export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
   src,
@@ -251,8 +255,9 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
   className,
   loop = true,
   playsInline = true,
-  preload = "metadata",
+  preload = "auto",
   pausedPreview = false,
+  soundEnabled = false,
   onVideoError,
   ...props
 }: SilentAutoPlayVideoProps) {
@@ -277,36 +282,57 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
 
       videoRef.current = node;
       if (node) {
-        node.defaultMuted = true;
-        node.muted = true;
+        node.dataset.soundEnabled = soundEnabled ? "true" : "false";
+        node.defaultMuted = !soundEnabled;
+        node.muted = !soundEnabled;
+        node.volume = 1;
         node.playsInline = true;
         if (!pausedPreview && !canvasVideosSuspended) {
           const obs = getSharedVideoObserver();
           if (obs) {
             obs.observe(node);
             observedVideos.add(node);
-          } else if (activePlayingVideos.size < MAX_CONCURRENT_CANVAS_VIDEOS) {
+          }
+          if (activePlayingVideos.size < MAX_CONCURRENT_CANVAS_VIDEOS) {
             activePlayingVideos.add(node);
             const playPromise = node.play();
             if (playPromise && typeof playPromise.catch === "function") {
               playPromise.catch(() => {
-                activePlayingVideos.delete(node);
+                node.muted = true;
+                node.play().catch(() => {
+                  activePlayingVideos.delete(node);
+                });
               });
             }
           }
         }
       }
     },
-    [pausedPreview],
+    [pausedPreview, soundEnabled],
   );
+
+  useEffect(() => {
+    const node = videoRef.current;
+    if (!node) return;
+    node.dataset.soundEnabled = soundEnabled ? "true" : "false";
+    node.defaultMuted = !soundEnabled;
+    node.muted = !soundEnabled;
+    if (soundEnabled) {
+      node.volume = 1;
+      if (node.paused) {
+        node.play().catch(() => {});
+      }
+    }
+  }, [soundEnabled]);
 
   useEffect(() => {
     setOverrideSrc(null);
     setFailed(false);
     const node = videoRef.current;
     if (!node) return;
-    node.defaultMuted = true;
-    node.muted = true;
+    node.dataset.soundEnabled = soundEnabled ? "true" : "false";
+    node.defaultMuted = !soundEnabled;
+    node.muted = !soundEnabled;
     node.playsInline = true;
     if (pausedPreview || canvasVideosSuspended) {
       activePlayingVideos.delete(node);
@@ -320,7 +346,7 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       obs.observe(node);
       observedVideos.add(node);
     }
-  }, [resolvedSrc, pausedPreview]);
+  }, [resolvedSrc, pausedPreview, soundEnabled]);
 
   useEffect(() => {
     return () => {
@@ -383,7 +409,8 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       src={activeVideoSrc}
       poster={safePoster}
       aria-label={alt}
-      muted
+      muted={!soundEnabled}
+      autoPlay
       loop={loop}
       playsInline={playsInline}
       preload={preload}
@@ -402,8 +429,9 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       onLoadedData={(e) => {
         setFailed(false);
         const node = e.currentTarget;
-        node.defaultMuted = true;
-        node.muted = true;
+        node.dataset.soundEnabled = soundEnabled ? "true" : "false";
+        node.defaultMuted = !soundEnabled;
+        node.muted = !soundEnabled;
         if (
           !pausedPreview &&
           !canvasVideosSuspended &&
@@ -413,7 +441,10 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
           const playPromise = node.play();
           if (playPromise && typeof playPromise.catch === "function") {
             playPromise.catch(() => {
-              activePlayingVideos.delete(node);
+              node.muted = true;
+              node.play().catch(() => {
+                activePlayingVideos.delete(node);
+              });
             });
           }
         }
