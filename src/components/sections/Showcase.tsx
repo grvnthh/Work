@@ -158,8 +158,12 @@ export function Showcase() {
     void syncFromStore();
 
     const handleLocalUpdate = (event: Event) => {
-      const custom = event as CustomEvent<{ items?: PortfolioCanvasProject[] }>;
-      if (custom.detail?.items) {
+      const custom = event as CustomEvent<
+        PortfolioCanvasProject[] | { items?: PortfolioCanvasProject[]; store?: unknown }
+      >;
+      if (Array.isArray(custom.detail)) {
+        setCmsProjects(custom.detail);
+      } else if (custom.detail && Array.isArray(custom.detail.items)) {
         setCmsProjects(custom.detail.items);
       } else {
         const latest = buildResolvedCanvasItemsFromStore(readLocalCmsStore());
@@ -174,9 +178,24 @@ export function Showcase() {
       }
     };
 
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === "visible") {
+        void syncFromStore();
+      }
+    };
+
     window.addEventListener("canvas-cms-updated", handleLocalUpdate);
     window.addEventListener("canvas-cms-server-synced", handleLocalUpdate);
     window.addEventListener("storage", handleStorageEvent);
+    window.addEventListener("focus", handleFocusOrVisible);
+    document.addEventListener("visibilitychange", handleFocusOrVisible);
+
+    // Periodic lightweight sync when tab is visible so changes made in a separate browser context/iframe appear automatically
+    const pollInterval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void syncFromStore();
+      }
+    }, 4000);
 
     let channel: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== "undefined") {
@@ -185,6 +204,9 @@ export function Showcase() {
         channel.onmessage = (msg) => {
           if (msg.data?.items && Array.isArray(msg.data.items)) {
             setCmsProjects(msg.data.items as PortfolioCanvasProject[]);
+          } else if (msg.data?.store) {
+            const resolved = buildResolvedCanvasItemsFromStore(msg.data.store);
+            setCmsProjects(resolved.items);
           } else {
             const latest = buildResolvedCanvasItemsFromStore(readLocalCmsStore());
             setCmsProjects(latest.items);
@@ -197,9 +219,12 @@ export function Showcase() {
 
     return () => {
       active = false;
+      window.clearInterval(pollInterval);
       window.removeEventListener("canvas-cms-updated", handleLocalUpdate);
       window.removeEventListener("canvas-cms-server-synced", handleLocalUpdate);
       window.removeEventListener("storage", handleStorageEvent);
+      window.removeEventListener("focus", handleFocusOrVisible);
+      document.removeEventListener("visibilitychange", handleFocusOrVisible);
       if (channel) {
         try {
           channel.close();

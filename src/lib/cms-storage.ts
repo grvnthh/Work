@@ -46,7 +46,7 @@ const CMS_SNAPSHOT_PREFIX = "cms-showcase-store-v8-";
 const SUPABASE_FALLBACK_URL = "https://jnolhqtsuyfckytngssa.supabase.co";
 const SUPABASE_FALLBACK_KEY = "sb_publishable_UtllKtAciWXasnSJ1VY35g_P5tiVA9W";
 const SUPABASE_BUCKET = "contact-attachments";
-const TEN_YEARS_SECONDS = 60 * 60 * 24 * 365 * 10;
+const TWENTY_YEARS_SECONDS = 60 * 60 * 24 * 365 * 20;
 
 let memoryStore: CanvasCmsStoreData | null = null;
 const undoHistoryStack: CanvasCmsStoreData[] = [];
@@ -133,7 +133,7 @@ async function uploadBlobToSupabaseRest(
 
 async function createSupabaseSignedUrlRest(
   storagePath: string,
-  expiresIn = TEN_YEARS_SECONDS,
+  expiresIn = TWENTY_YEARS_SECONDS,
 ): Promise<string | null> {
   const { url, key } = getSupabaseRestConfig();
   try {
@@ -253,22 +253,77 @@ function cloneStore(store: CanvasCmsStoreData): CanvasCmsStoreData {
   return JSON.parse(JSON.stringify(store)) as CanvasCmsStoreData;
 }
 
+const PERMANENTLY_PURGED_ITEM_IDS = new Set([
+  "item-1792686734690-x6479",
+  "item-1792686865884-v83y6",
+  "item-1792686979695-47n18",
+  "item-1792687105456-7f55v",
+]);
+
+const PERMANENTLY_PURGED_MEDIA_PATTERN =
+  /(?:demo-reel-kinetic|demo-reel-story|demo-showreel|demo-vertical-reel|(?:^|[-/])edit-(?:1|15|18|24))\.(?:mp4|webm|mov)/i;
+
+export function isPermanentlyPurgedMediaItem(
+  item?: {
+    id?: string;
+    imageUrl?: string;
+    videoUrl?: string;
+  } | null,
+): boolean {
+  if (!item) return false;
+  if (item.id && PERMANENTLY_PURGED_ITEM_IDS.has(item.id)) return true;
+  if (item.imageUrl && PERMANENTLY_PURGED_MEDIA_PATTERN.test(item.imageUrl)) return true;
+  if (item.videoUrl && PERMANENTLY_PURGED_MEDIA_PATTERN.test(item.videoUrl)) return true;
+  return false;
+}
+
 export function normalizeStore(
   raw: Partial<CanvasCmsStoreData> | null | undefined,
 ): CanvasCmsStoreData {
   if (!raw || typeof raw !== "object") {
     return createEmptyStore();
   }
-  const addedItems = Array.isArray(raw.addedItems) ? [...raw.addedItems] : [];
+  const rawAddedItems = Array.isArray(raw.addedItems) ? [...raw.addedItems] : [];
   const rawDeletedIds = Array.isArray(raw.deletedIds) ? [...raw.deletedIds] : [];
+  const purgedIds = new Set<string>(PERMANENTLY_PURGED_ITEM_IDS);
+
+  const addedItems: PortfolioCanvasProject[] = [];
+  for (const item of rawAddedItems) {
+    if (!item || isPermanentlyPurgedMediaItem(item)) {
+      if (item?.id) purgedIds.add(item.id);
+      continue;
+    }
+    if (Array.isArray(item.extraMedia) && item.extraMedia.length > 0) {
+      const cleanExtras = item.extraMedia.filter((ex) => !isPermanentlyPurgedMediaItem(ex));
+      addedItems.push({
+        ...item,
+        extraMedia: cleanExtras.length > 0 ? cleanExtras : undefined,
+      });
+    } else {
+      addedItems.push(item);
+    }
+  }
+
   const addedIdSet = new Set(addedItems.map((item) => item.id));
-  const deletedIds = rawDeletedIds.filter((id) => !addedIdSet.has(id));
+  const mergedDeletedSet = new Set<string>([...rawDeletedIds, ...purgedIds]);
+  const deletedIds = Array.from(mergedDeletedSet).filter((id) => !addedIdSet.has(id));
+
+  const cleanOverrides: Record<string, Partial<PortfolioCanvasProject>> = {};
+  if (raw.overrides && typeof raw.overrides === "object") {
+    Object.assign(cleanOverrides, raw.overrides);
+  }
+  for (const pid of purgedIds) {
+    delete cleanOverrides[pid];
+  }
+
   return {
     addedItems,
     deletedIds,
-    overrides: raw.overrides && typeof raw.overrides === "object" ? { ...raw.overrides } : {},
+    overrides: cleanOverrides,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date(0).toISOString(),
-    ...(typeof raw.lastFocusedId === "string" ? { lastFocusedId: raw.lastFocusedId } : {}),
+    ...(typeof raw.lastFocusedId === "string" && !purgedIds.has(raw.lastFocusedId)
+      ? { lastFocusedId: raw.lastFocusedId }
+      : {}),
   };
 }
 
@@ -768,7 +823,7 @@ async function uploadMediaBlobToSupabaseCloud(key: string, blob: Blob): Promise<
         markKeyCloudUploaded(key);
       }
     }
-    const signedUrl = await createSupabaseSignedUrlRest(storagePath, TEN_YEARS_SECONDS);
+    const signedUrl = await createSupabaseSignedUrlRest(storagePath, TWENTY_YEARS_SECONDS);
     if (signedUrl) {
       markKeyCloudUploaded(key, signedUrl);
       return signedUrl;
@@ -791,7 +846,7 @@ export async function getCloudSignedUrlForMediaKey(
     cloudSignedUrlCache.delete(key);
   }
   try {
-    const signedUrl = await createSupabaseSignedUrlRest(`inquiries/${key}`, TEN_YEARS_SECONDS);
+    const signedUrl = await createSupabaseSignedUrlRest(`inquiries/${key}`, TWENTY_YEARS_SECONDS);
     if (signedUrl) {
       markKeyCloudUploaded(key, signedUrl);
       return signedUrl;
@@ -799,14 +854,14 @@ export async function getCloudSignedUrlForMediaKey(
 
     const suffix = getCmsKeySuffix(key);
     if (suffix) {
-      const objects = await listSupabaseSnapshotsRest("", 100);
+      const objects = await listSupabaseSnapshotsRest("cms-1", 100);
       const matched = objects.find(
         (obj) => obj.name.toLowerCase().endsWith(suffix) || getCmsKeySuffix(obj.name) === suffix,
       );
       if (matched) {
         const fuzzySigned = await createSupabaseSignedUrlRest(
           `inquiries/${matched.name}`,
-          TEN_YEARS_SECONDS,
+          TWENTY_YEARS_SECONDS,
         );
         if (fuzzySigned) {
           markKeyCloudUploaded(key, fuzzySigned);
@@ -959,7 +1014,11 @@ async function resolveBestDurableMediaUrl(url?: string | null): Promise<string |
       cache: "no-store",
     });
     if (checkRes.ok) {
-      const data = (await checkRes.json()) as { exists?: boolean };
+      const data = (await checkRes.json()) as { exists?: boolean; signedUrl?: string };
+      if (data.signedUrl && data.signedUrl.startsWith("https://")) {
+        markKeyCloudUploaded(key, data.signedUrl);
+        return data.signedUrl;
+      }
       if (data.exists) {
         const mediaRes = await fetch(`/api/drive-media?local=${encodeURIComponent(key)}`);
         if (mediaRes.ok) {
@@ -981,13 +1040,19 @@ async function resolveBestDurableMediaUrl(url?: string | null): Promise<string |
 }
 
 /**
- * Surgically upgrades local=/api/drive-media URLs in-place to 10-year https:// signed URLs
- * WITHOUT modifying updatedAt, deletedIds, item membership, or coordinates, so background
- * media healing can NEVER overwrite or revert any user CMS edit.
+ * Surgically upgrades local=/api/drive-media URLs in-place to 20-year https:// signed URLs
+ * and synchronizes the upgraded store to local storage, BroadcastChannel, server disk, and Supabase Cloud.
  */
 function applyUpgradedMediaUrlsToStore(urlMap: Record<string, string>): void {
   const keys = Object.keys(urlMap);
   if (keys.length === 0) return;
+
+  for (const k of keys) {
+    const u = urlMap[k];
+    if (u && u.startsWith("https://")) {
+      markKeyCloudUploaded(k, u);
+    }
+  }
 
   const store = readLocalCmsStore();
   let modified = false;
@@ -1037,9 +1102,22 @@ function applyUpgradedMediaUrlsToStore(urlMap: Record<string, string>): void {
 
   if (!modified) return;
 
+  store.updatedAt = new Date().toISOString();
   persistStoreLocally(store);
   const resolved = buildResolvedCanvasItemsFromStore(store);
   broadcastCanvasCmsUpdate(resolved.items);
+
+  const channel = getBroadcastChannel();
+  if (channel) {
+    try {
+      channel.postMessage({
+        type: "cms-store-updated",
+        store,
+      });
+    } catch {
+      // Ignore broadcast errors
+    }
+  }
 
   void fetch(`/api/drive-media?cmsState=1&_t=${Date.now()}`, {
     method: "POST",
@@ -1050,6 +1128,8 @@ function applyUpgradedMediaUrlsToStore(urlMap: Record<string, string>): void {
       urlMap,
     }),
   }).catch(() => {});
+
+  void pushStoreToServer(store);
 }
 
 function scheduleBackgroundMediaHealing(store: CanvasCmsStoreData): void {
@@ -1314,9 +1394,10 @@ export async function uploadMediaFilesToCms(
 
   onProgress?.(5, "Reading media dimensions...");
   const measuredList = await Promise.all(files.map((file) => measureFileCanvasDimensions(file)));
-  const results: UploadedMediaDescriptor[] = [];
+  const results: UploadedMediaDescriptor[] = new Array(files.length);
+  let completedCount = 0;
 
-  for (let index = 0; index < files.length; index += 1) {
+  const uploadSingleFile = async (index: number) => {
     const file = files[index];
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
     const isVideo =
@@ -1340,56 +1421,77 @@ export async function uploadMediaFilesToCms(
 
     const localKey = `cms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${safeSlug}.${safeExt}`;
 
-    // 1. Zero-copy 0ms local object URL registration so even a 10-hour video autoplays immediately
+    // 1. Zero-copy 0ms local object URL registration so playback starts immediately
     const instantMemUrl = URL.createObjectURL(file);
     objectUrlCache.set(localKey, instantMemUrl);
 
-    // 2. Persist binary File in IndexedDB asynchronously without blocking UI
+    // 2. Persist binary File in IndexedDB asynchronously
     void saveMediaBlobToIdb(localKey, file).catch(() => {});
 
-    // 3. Stream to server (chunked for large files) + Supabase Cloud in background
-    const serverUploadPromise = streamFileToServerWithChunks(file, localKey, onProgress)
+    onProgress?.(
+      Math.min(92, Math.round(10 + (completedCount / files.length) * 80)),
+      `Uploading ${file.name} (${completedCount + 1}/${files.length})...`,
+    );
+
+    // 3. Upload to server disk and Supabase Cloud with 20-year signed URL
+    const serverUploadPromise = streamFileToServerWithChunks(file, localKey)
       .then((serverUrl) => {
         if (serverUrl && serverUrl.startsWith("https://")) {
+          markKeyCloudUploaded(localKey, serverUrl);
           applyUpgradedMediaUrlsToStore({ [localKey]: serverUrl });
         }
         return serverUrl;
       })
       .catch(() => null);
 
-    const cloudUploadPromise =
-      file.size <= 50 * 1024 * 1024
-        ? uploadMediaBlobToSupabaseCloud(localKey, file).then((signedUrl) => {
-            if (signedUrl) {
-              applyUpgradedMediaUrlsToStore({ [localKey]: signedUrl });
-            }
-            return signedUrl;
-          })
-        : Promise.resolve(null);
+    let durableUrl: string | null = null;
+    if (file.size <= 50 * 1024 * 1024) {
+      const cloudUrl = await uploadMediaBlobToSupabaseCloud(localKey, file).catch(() => null);
+      if (cloudUrl && cloudUrl.startsWith("https://")) {
+        durableUrl = cloudUrl;
+      } else {
+        const srvUrl = await serverUploadPromise;
+        if (srvUrl) durableUrl = srvUrl;
+      }
+    } else {
+      const srvUrl = await serverUploadPromise;
+      if (srvUrl) durableUrl = srvUrl;
+    }
 
-    // For small files (<= 15 MB), wait up to 1.2s for direct cloud URL; for larger files, return in 0ms
-    // so large/10-hour videos appear and autoplay on the Showcase immediately while streaming in background.
-    const fastResolvedUrl =
-      file.size <= 15 * 1024 * 1024
-        ? await Promise.race([
-            cloudUploadPromise.catch(() => null),
-            serverUploadPromise.catch(() => null),
-            new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 1200)),
-          ])
-        : null;
+    const finalUrl =
+      durableUrl ||
+      cloudSignedUrlCache.get(localKey) ||
+      `/api/drive-media?local=${encodeURIComponent(localKey)}`;
 
-    const finalUrl = fastResolvedUrl || `/api/drive-media?local=${encodeURIComponent(localKey)}`;
+    completedCount += 1;
+    onProgress?.(
+      Math.min(98, Math.round(10 + (completedCount / files.length) * 88)),
+      `Uploaded ${completedCount} of ${files.length} (${file.name})`,
+    );
 
-    results.push({
+    results[index] = {
       url: finalUrl,
       mediaType: isVideo ? "video" : "image",
       title: cleanTitle,
       width: dims.width,
       height: dims.height,
-    });
-  }
+    };
+  };
 
-  onProgress?.(100, "Ready!");
+  // Run up to 4 concurrent uploads so batch drops of 40+ files finish quickly without browser socket exhaustion
+  const concurrency = Math.min(4, files.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (nextIndex < files.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      await uploadSingleFile(current);
+    }
+  });
+
+  await Promise.all(workers);
+
+  onProgress?.(100, "All media synced to permanent cloud storage!");
   return results;
 }
 
@@ -1398,9 +1500,11 @@ export async function uploadMediaFilesToCms(
 // ============================================================================
 
 export function mergeCmsStores(
-  primary: CanvasCmsStoreData,
-  secondary: CanvasCmsStoreData,
+  rawPrimary: CanvasCmsStoreData,
+  rawSecondary: CanvasCmsStoreData,
 ): CanvasCmsStoreData {
+  const primary = normalizeStore(rawPrimary);
+  const secondary = normalizeStore(rawSecondary);
   const pTime = new Date(primary.updatedAt || 0).getTime();
   const sTime = new Date(secondary.updatedAt || 0).getTime();
 
@@ -1420,13 +1524,30 @@ export function mergeCmsStores(
   const newerTime = Math.max(pTime, sTime);
   const olderTime = Math.min(pTime, sTime);
 
-  // Build a lookup of any already-upgraded https:// URLs in the older store by media key
-  const olderCloudUrlByKey = new Map<string, string>();
-  for (const oldItem of older.addedItems) {
-    const oldUrl = oldItem.videoUrl || oldItem.imageUrl;
-    if (oldUrl && oldUrl.startsWith("https://")) {
-      const k = extractMediaKeyFromUrl(oldUrl);
-      if (k) olderCloudUrlByKey.set(k, oldUrl);
+  // Build a lookup of any already-upgraded https:// URLs in either store by media key
+  const knownCloudUrlByKey = new Map<string, string>();
+  for (const srcStore of [newer, older]) {
+    for (const srcItem of srcStore.addedItems) {
+      const srcUrl = srcItem.videoUrl || srcItem.imageUrl;
+      if (srcUrl && srcUrl.startsWith("https://")) {
+        const k = extractMediaKeyFromUrl(srcUrl);
+        if (k) {
+          knownCloudUrlByKey.set(k, srcUrl);
+          markKeyCloudUploaded(k, srcUrl);
+        }
+      }
+      if (srcItem.extraMedia) {
+        for (const extra of srcItem.extraMedia) {
+          const eUrl = extra.videoUrl || extra.imageUrl;
+          if (eUrl && eUrl.startsWith("https://")) {
+            const ek = extractMediaKeyFromUrl(eUrl);
+            if (ek) {
+              knownCloudUrlByKey.set(ek, eUrl);
+              markKeyCloudUploaded(ek, eUrl);
+            }
+          }
+        }
+      }
     }
   }
 
@@ -1434,7 +1555,7 @@ export function mergeCmsStores(
     const curUrl = item.videoUrl || item.imageUrl;
     if (curUrl && curUrl.includes("local=")) {
       const k = extractMediaKeyFromUrl(curUrl);
-      const upgraded = k ? (cloudSignedUrlCache.get(k) ?? olderCloudUrlByKey.get(k)) : undefined;
+      const upgraded = k ? (cloudSignedUrlCache.get(k) ?? knownCloudUrlByKey.get(k)) : undefined;
       if (upgraded) {
         return {
           ...item,
@@ -1650,7 +1771,12 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
 
   const versionBeforeFetch = mutationVersion;
 
-  const serverStore = await fetchServerCmsStoreWithTimeout(3500);
+  // Fetch both server disk store and Supabase cloud snapshot in parallel so cross-context
+  // and cold-start sync always sees the latest published state.
+  const [serverStore, cloudStore] = await Promise.all([
+    fetchServerCmsStoreWithTimeout(3500),
+    readCloudCmsStoreSnapshot(),
+  ]);
 
   if (mutationVersion !== versionBeforeFetch) {
     const current = readLocalCmsStore();
@@ -1659,62 +1785,52 @@ export async function loadSynchronizedCmsState(): Promise<ResolvedCanvasCmsState
   }
 
   const localStore = readLocalCmsStore();
-  const localTime = new Date(localStore.updatedAt || 0).getTime();
-  const serverTime = new Date(serverStore?.updatedAt || 0).getTime();
+
+  const isInitialized = (s: CanvasCmsStoreData | null | undefined): s is CanvasCmsStoreData =>
+    Boolean(
+      s &&
+      (s.addedItems.length > 0 ||
+        s.deletedIds.length > 0 ||
+        new Date(s.updatedAt || 0).getTime() > 0),
+    );
+
+  const candidates: CanvasCmsStoreData[] = [];
+  if (isInitialized(localStore)) candidates.push(localStore);
+  if (isInitialized(serverStore)) candidates.push(serverStore);
+  if (isInitialized(cloudStore)) candidates.push(cloudStore);
 
   let chosenStore: CanvasCmsStoreData;
 
-  const hasServerItems = Boolean(
-    serverStore &&
-    (serverStore.addedItems.length > 0 || serverStore.deletedIds.length > 0 || serverTime > 0),
-  );
-  const hasLocalItems = Boolean(
-    localStore &&
-    (localStore.addedItems.length > 0 || localStore.deletedIds.length > 0 || localTime > 0),
-  );
-
-  if (hasServerItems && hasLocalItems && serverStore) {
-    if (serverTime >= localTime) {
-      chosenStore = mergeCmsStores(localStore, serverStore);
-    } else {
-      chosenStore = mergeCmsStores(serverStore, localStore);
-      void pushStoreToServer(chosenStore, true);
+  if (candidates.length > 0) {
+    // Sort ascending by updatedAt and fold with mergeCmsStores so the newest store is authoritative
+    // while preserving any upgraded 20-year https:// URLs from all stores.
+    candidates.sort(
+      (a, b) => new Date(a.updatedAt || 0).getTime() - new Date(b.updatedAt || 0).getTime(),
+    );
+    chosenStore = candidates[0];
+    for (let i = 1; i < candidates.length; i += 1) {
+      chosenStore = mergeCmsStores(chosenStore, candidates[i]);
     }
     persistStoreLocally(chosenStore);
-  } else if (hasServerItems && serverStore) {
-    chosenStore = serverStore;
-    persistStoreLocally(chosenStore);
-  } else if (hasLocalItems) {
-    chosenStore = localStore;
-    if (serverStore !== null) {
+
+    const serverTime = new Date(serverStore?.updatedAt || 0).getTime();
+    const cloudTime = new Date(cloudStore?.updatedAt || 0).getTime();
+    const chosenTime = new Date(chosenStore.updatedAt || 0).getTime();
+    if (chosenTime > serverTime || chosenTime > cloudTime) {
       void pushStoreToServer(chosenStore, true);
     }
   } else {
-    // Cold start fallback when server and local are both empty
-    const cloudStore = await readCloudCmsStoreSnapshot();
-    if (cloudStore && (cloudStore.addedItems.length > 0 || cloudStore.deletedIds.length > 0)) {
-      chosenStore = cloudStore;
+    const idbBackupStore = await readIdbStoreBackup();
+    if (isInitialized(idbBackupStore)) {
+      chosenStore = idbBackupStore;
       persistStoreLocally(chosenStore);
       void pushStoreToServer(chosenStore, true);
     } else {
-      const idbBackupStore = await readIdbStoreBackup();
-      const idbTime = new Date(idbBackupStore?.updatedAt || 0).getTime();
-      if (
-        idbBackupStore &&
-        (idbBackupStore.addedItems.length > 0 ||
-          idbBackupStore.deletedIds.length > 0 ||
-          idbTime > 0)
-      ) {
-        chosenStore = idbBackupStore;
+      const recovery = await recoverOrphanedIdbMediaIfStoreEmpty(localStore);
+      chosenStore = recovery.store;
+      if (recovery.recovered) {
         persistStoreLocally(chosenStore);
         void pushStoreToServer(chosenStore, true);
-      } else {
-        const recovery = await recoverOrphanedIdbMediaIfStoreEmpty(localStore);
-        chosenStore = recovery.store;
-        if (recovery.recovered) {
-          persistStoreLocally(chosenStore);
-          void pushStoreToServer(chosenStore, true);
-        }
       }
     }
   }
@@ -1806,7 +1922,13 @@ export function mutateAddCanvasItems(
       }
     }
 
-    const primaryUrl = raw.imageUrl || raw.videoUrl || "/media/showcase-album-2.png";
+    let primaryUrl = raw.imageUrl || raw.videoUrl || "/media/showcase-album-2.png";
+    if (primaryUrl.includes("local=")) {
+      const key = extractMediaKeyFromUrl(primaryUrl);
+      if (key && cloudSignedUrlCache.has(key)) {
+        primaryUrl = cloudSignedUrlCache.get(key)!;
+      }
+    }
     const itemId = raw.id || `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     newestId = itemId;
     if (typeof raw.canvasX !== "number" || typeof raw.canvasY !== "number") {
@@ -1838,7 +1960,8 @@ export function mutateAddCanvasItems(
 
   settleStoreNonOverlappingPositions(store, newPriorityIds);
   const saved = writeLocalCmsStore(store, newestId);
-  void pushStoreToServer(saved);
+  void pushStoreToServer(saved, true);
+  scheduleBackgroundMediaHealing(saved);
   return buildResolvedCanvasItemsFromStore(saved);
 }
 

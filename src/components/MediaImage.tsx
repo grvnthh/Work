@@ -382,15 +382,16 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       );
     }
     return (
-      <video
-        src="/media/demo-showreel.mp4"
+      <div
+        role="img"
         aria-label={alt ?? "Video preview"}
-        muted={!soundEnabled}
-        autoPlay
-        loop={loop}
-        playsInline={playsInline}
-        className={className}
-      />
+        className={cn(
+          "flex items-center justify-center bg-muted/30 px-4 text-center text-xs text-muted-foreground",
+          className,
+        )}
+      >
+        <span>Media unavailable</span>
+      </div>
     );
   }
 
@@ -449,23 +450,16 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       }}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
-        const fallbackVideo = "/media/demo-showreel.mp4";
         if (key) {
           void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
             if (freshUrl && freshUrl !== activeVideoSrc) {
               setOverrideSrc(freshUrl);
-              setFailed(false);
-            } else if (activeVideoSrc !== fallbackVideo) {
-              setOverrideSrc(fallbackVideo);
               setFailed(false);
             } else {
               setFailed(true);
               onVideoError?.();
             }
           });
-        } else if (activeVideoSrc !== fallbackVideo) {
-          setOverrideSrc(fallbackVideo);
-          setFailed(false);
         } else {
           setFailed(true);
           onVideoError?.();
@@ -568,13 +562,16 @@ export function InteractiveVideo({
       );
     }
     return (
-      <video
-        src="/media/demo-showreel.mp4"
+      <div
+        role="img"
         aria-label={alt ?? "Video preview"}
-        playsInline
-        controls
-        className={className}
-      />
+        className={cn(
+          "flex items-center justify-center bg-muted/30 px-4 text-center text-xs text-muted-foreground",
+          className,
+        )}
+      >
+        <span>Media unavailable</span>
+      </div>
     );
   }
 
@@ -598,23 +595,16 @@ export function InteractiveVideo({
       className={className}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
-        const fallbackVideo = "/media/demo-showreel.mp4";
         if (key) {
           void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
             if (freshUrl && freshUrl !== activeVideoSrc) {
               setOverrideSrc(freshUrl);
-              setFailed(false);
-            } else if (activeVideoSrc !== fallbackVideo) {
-              setOverrideSrc(fallbackVideo);
               setFailed(false);
             } else {
               setFailed(true);
               onVideoError?.();
             }
           });
-        } else if (activeVideoSrc !== fallbackVideo) {
-          setOverrideSrc(fallbackVideo);
-          setFailed(false);
         } else {
           setFailed(true);
           onVideoError?.();

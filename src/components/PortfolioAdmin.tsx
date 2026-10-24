@@ -35,6 +35,7 @@ import { type PortfolioCanvasProject } from "@/data/portfolioProjects";
 import {
   broadcastCanvasCmsUpdate,
   canUndoCmsAction,
+  flushPendingCmsPush,
   loadSynchronizedCmsState,
   mutateAddCanvasItems,
   mutateClearAllCanvasItems,
@@ -174,8 +175,11 @@ export function PortfolioAdmin() {
       const localRes = mutateAddCanvasItems(payloads);
       setItems(localRes.items);
       broadcastCanvasCmsUpdate(localRes.items, payloads[0]?.id);
+      setUploadStatusText("Syncing to permanent cloud storage...");
+      await pushStoreToServer(localRes.store, true);
+      await flushPendingCmsPush();
       toast.success(
-        `Added ${payloads.length} ${payloads.length === 1 ? "item" : "items"} to Showcase!`,
+        `Published ${payloads.length} ${payloads.length === 1 ? "item" : "items"} permanently to Showcase!`,
       );
     } catch {
       toast.error("Failed to upload files");
@@ -187,6 +191,17 @@ export function PortfolioAdmin() {
       }, 600);
     }
   }, []);
+
+  // Warn if closing tab while an active upload/sync is still in flight
+  useEffect(() => {
+    if (!syncing) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [syncing]);
 
   // Replace an existing card's media by dropping a file directly onto the card
   const handleReplaceCardMediaByDrop = useCallback(
@@ -214,6 +229,8 @@ export function PortfolioAdmin() {
         });
         setItems(localRes.items);
         broadcastCanvasCmsUpdate(localRes.items, targetItem.id);
+        await pushStoreToServer(localRes.store, true);
+        await flushPendingCmsPush();
         toast.success(`Updated media for "${targetItem.title}"`);
       } catch {
         toast.error("Failed to replace media");
@@ -415,6 +432,8 @@ export function PortfolioAdmin() {
       setNewMediaUrl("");
       setNewVideoUrl("");
       setNewExternalUrl("");
+      await pushStoreToServer(localRes.store, true);
+      await flushPendingCmsPush();
       toast.success(`Added "${newItem.title}" to Showcase!`);
     } catch {
       toast.error("Failed to add item");
@@ -450,6 +469,8 @@ export function PortfolioAdmin() {
       setItems(localRes.items);
       broadcastCanvasCmsUpdate(localRes.items, editingItem.id);
       setEditingItem(null);
+      await pushStoreToServer(localRes.store, true);
+      await flushPendingCmsPush();
       toast.success(`Updated "${editTitle}"`);
     } catch {
       toast.error("Failed to update item");
@@ -465,6 +486,8 @@ export function PortfolioAdmin() {
       setItems(localRes.items);
       if (unmutedItemId === id) setUnmutedItemId(null);
       broadcastCanvasCmsUpdate(localRes.items);
+      await pushStoreToServer(localRes.store, true);
+      await flushPendingCmsPush();
       toast.success(`Deleted "${title}"`);
     } catch {
       toast.error("Failed to delete item");

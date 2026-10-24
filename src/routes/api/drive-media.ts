@@ -5,6 +5,7 @@ import {
   buildResolvedCanvasItemsFromStore,
   extractMediaKeyFromUrl,
   getCmsKeySuffix,
+  isPermanentlyPurgedMediaItem,
   mergeCmsStores,
   normalizeStore,
   settleStoreNonOverlappingPositions,
@@ -51,7 +52,7 @@ const CMS_SNAPSHOT_PREFIX = "cms-showcase-store-v8-";
 const SUPABASE_FALLBACK_URL = "https://jnolhqtsuyfckytngssa.supabase.co";
 const SUPABASE_FALLBACK_KEY = "sb_publishable_UtllKtAciWXasnSJ1VY35g_P5tiVA9W";
 const SUPABASE_BUCKET = "contact-attachments";
-const TEN_YEARS_SECONDS = 60 * 60 * 24 * 365 * 10;
+const TWENTY_YEARS_SECONDS = 60 * 60 * 24 * 365 * 20;
 
 function getServerSupabaseCredentials(): { url: string; key: string } {
   const metaEnv = (
@@ -89,7 +90,7 @@ async function createServerSupabaseSignedUrl(storagePath: string): Promise<strin
     const res = await fetch(`${url}/storage/v1/object/sign/${SUPABASE_BUCKET}/${storagePath}`, {
       method: "POST",
       headers: buildSupabaseHeaders(key, { "Content-Type": "application/json" }),
-      body: JSON.stringify({ expiresIn: TEN_YEARS_SECONDS }),
+      body: JSON.stringify({ expiresIn: TWENTY_YEARS_SECONDS }),
     });
     if (!res.ok) return null;
     const data = (await res.json().catch(() => null)) as { signedURL?: string } | null;
@@ -151,7 +152,7 @@ async function getSupabaseStorageSignedUrl(
 
   const suffix = getCmsKeySuffix(safeName);
   if (suffix) {
-    const objects = await listServerSupabaseSnapshots("", 100);
+    const objects = await listServerSupabaseSnapshots("cms-1", 100);
     const matched = objects.find(
       (obj) => obj.name.toLowerCase().endsWith(suffix) || getCmsKeySuffix(obj.name) === suffix,
     );
@@ -634,17 +635,19 @@ export const Route = createFileRoute("/api/drive-media")({
 
         if (url.searchParams.get("cmsState") === "1") {
           let store = readServerCanvasCmsStore();
-          const cloudStore = await readSupabaseCanvasCmsStore();
+          const cloudStore = await readSupabaseCanvasCmsStore(true);
           if (cloudStore) {
             const diskTime = new Date(store.updatedAt || 0).getTime();
             const cloudTime = new Date(cloudStore.updatedAt || 0).getTime();
-            if (cloudTime > diskTime) {
+            if (cloudTime >= diskTime) {
               store = mergeCmsStores(store, cloudStore);
               writeServerCanvasCmsStore(store);
             } else if (
               diskTime > cloudTime &&
               (store.addedItems.length > 0 || store.deletedIds.length > 0)
             ) {
+              store = mergeCmsStores(cloudStore, store);
+              writeServerCanvasCmsStore(store);
               void writeSupabaseCanvasCmsStore(store);
             }
           }
@@ -655,6 +658,9 @@ export const Route = createFileRoute("/api/drive-media")({
         const inquiryFile = url.searchParams.get("inquiry");
         if (inquiryFile) {
           const safeName = path.basename(inquiryFile);
+          if (isPermanentlyPurgedMediaItem({ videoUrl: safeName })) {
+            return new Response("Attachment not found", { status: 404 });
+          }
           const inquiryPath = path.resolve(process.cwd(), "data", "inquiries", safeName);
           try {
             if (fs.existsSync(inquiryPath) && fs.statSync(inquiryPath).size > 0) {
@@ -679,6 +685,15 @@ export const Route = createFileRoute("/api/drive-media")({
         if (localFile) {
           const safeName = path.basename(localFile);
           const isCheckOnly = url.searchParams.get("check") === "1";
+          if (isPermanentlyPurgedMediaItem({ videoUrl: safeName })) {
+            if (isCheckOnly) {
+              return Response.json({ exists: false, size: 0 });
+            }
+            return new Response("Media not found", {
+              status: 404,
+              headers: { "Cache-Control": "no-store" },
+            });
+          }
           const cmsMediaPath = path.resolve(process.cwd(), "data", "cms-media", safeName);
           const publicMediaPath = path.resolve(process.cwd(), "public", "media", safeName);
           const ext = path.extname(safeName);
@@ -703,7 +718,7 @@ export const Route = createFileRoute("/api/drive-media")({
               }
             }
 
-            // Fuzzy match on local disk data/cms-media directory by suffix
+            // Fuzzy match on local disk data/cms-media and public/media directory by suffix
             const targetSuffix = getCmsKeySuffix(safeName);
             if (targetSuffix) {
               const cmsMediaDir = path.resolve(process.cwd(), "data", "cms-media");
@@ -728,6 +743,34 @@ export const Route = createFileRoute("/api/drive-media")({
                   }
                 }
               }
+
+              const pubMediaDir = path.resolve(process.cwd(), "public", "media");
+              if (fs.existsSync(pubMediaDir)) {
+                const pubFiles = fs.readdirSync(pubMediaDir);
+                const baseNoExt = targetSuffix.replace(/\.[^.]+$/, "");
+                const matchedPub = pubFiles.find((f) => {
+                  const fl = f.toLowerCase();
+                  return (
+                    fl === targetSuffix ||
+                    fl === `showcase-${targetSuffix}` ||
+                    fl.startsWith(`showcase-${baseNoExt}-`)
+                  );
+                });
+                if (matchedPub) {
+                  const matchedPubPath = path.join(pubMediaDir, matchedPub);
+                  const stat = fs.statSync(matchedPubPath);
+                  if (stat.isFile() && stat.size > 0) {
+                    if (isCheckOnly) return Response.json({ exists: true, size: stat.size });
+                    const mExt = path.extname(matchedPub);
+                    return streamLocalFile(
+                      matchedPubPath,
+                      getMimeTypeFromExt(mExt),
+                      matchedPub,
+                      request,
+                    );
+                  }
+                }
+              }
             }
           } catch {
             // Fall through to memory map
@@ -744,41 +787,19 @@ export const Route = createFileRoute("/api/drive-media")({
           const supabaseSignedUrl = await getSupabaseStorageSignedUrl("cms", safeName);
           if (supabaseSignedUrl) {
             if (isCheckOnly) {
-              return Response.json({ exists: true, size: 1 });
+              return Response.json({ exists: true, size: 1, signedUrl: supabaseSignedUrl });
             }
             return Response.redirect(supabaseSignedUrl, 302);
           }
 
           if (isCheckOnly) {
-            return Response.json({ exists: true, size: 1 });
+            return Response.json({ exists: false, size: 0 });
           }
 
-          // Graceful fallback to prevent "Media unavailable" placeholder errors
-          const isVideo = [
-            ".mp4",
-            ".mov",
-            ".webm",
-            ".m4v",
-            ".mkv",
-            ".avi",
-            ".ogg",
-            ".ogv",
-          ].includes(ext.toLowerCase());
-          const fallbackPath = isVideo
-            ? path.resolve(process.cwd(), "public", "media", "demo-showreel.mp4")
-            : path.resolve(process.cwd(), "public", "media", "showcase-1.png");
-
-          if (fs.existsSync(fallbackPath) && fs.statSync(fallbackPath).size > 0) {
-            const fallbackExt = path.extname(fallbackPath);
-            return streamLocalFile(
-              fallbackPath,
-              getMimeTypeFromExt(fallbackExt),
-              path.basename(fallbackPath),
-              request,
-            );
-          }
-
-          return new Response("Media not found", { status: 404 });
+          return new Response("Media not found", {
+            status: 404,
+            headers: { "Cache-Control": "no-store" },
+          });
         }
 
         const fileId = url.searchParams.get("id");
@@ -868,15 +889,41 @@ export const Route = createFileRoute("/api/drive-media")({
               }
 
               if (modified) {
+                current.updatedAt = new Date().toISOString();
                 const saved = writeServerCanvasCmsStore(current);
-                void writeSupabaseCanvasCmsStore(saved);
+                await writeSupabaseCanvasCmsStore(saved);
                 return Response.json(buildResolvedCanvasItemsFromStore(saved));
               }
               return Response.json(buildResolvedCanvasItemsFromStore(current));
             }
 
             if (body?.store) {
+              const existingServer = readServerCanvasCmsStore();
+              const knownHttpsByKey = new Map<string, string>();
+              for (const existingItem of existingServer.addedItems) {
+                const eu = existingItem.videoUrl || existingItem.imageUrl;
+                if (eu && eu.startsWith("https://")) {
+                  const k = extractMediaKeyFromUrl(eu);
+                  if (k) knownHttpsByKey.set(k, eu);
+                }
+              }
+
               const incoming = normalizeStore(body.store);
+              for (let i = 0; i < incoming.addedItems.length; i += 1) {
+                const it = incoming.addedItems[i];
+                const curU = it.videoUrl || it.imageUrl;
+                if (curU && curU.includes("local=")) {
+                  const k = extractMediaKeyFromUrl(curU);
+                  const knownHttps = k ? knownHttpsByKey.get(k) : undefined;
+                  if (knownHttps) {
+                    incoming.addedItems[i] = {
+                      ...it,
+                      imageUrl: knownHttps,
+                      ...(it.mediaType === "video" || it.videoUrl ? { videoUrl: knownHttps } : {}),
+                    };
+                  }
+                }
+              }
               incoming.updatedAt = body.store.updatedAt || new Date().toISOString();
               const saved = writeServerCanvasCmsStore(incoming);
               await writeSupabaseCanvasCmsStore(saved);

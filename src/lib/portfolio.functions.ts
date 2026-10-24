@@ -14,11 +14,7 @@ import { getCmsData, getPublicPortfolioData } from "./drive-cms/store";
 import { syncGoogleDriveRoot } from "./drive-cms/drive-client";
 
 const BUILTIN_PUBLIC_MEDIA_FILES = new Set([
-  "demo-reel-kinetic.mp4",
-  "demo-reel-story.mp4",
-  "demo-showreel.mp4",
   "demo-thumbnail-16x9.jpg",
-  "demo-vertical-reel.mp4",
   "reel-cover-1.jpg",
   "reel-cover-2.jpg",
   "reel-cover-3.jpg",
