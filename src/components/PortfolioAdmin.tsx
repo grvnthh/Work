@@ -89,6 +89,7 @@ export function PortfolioAdmin() {
 
   // Add Item Modal
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isModalFileUploading, setIsModalFileUploading] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newYear, setNewYear] = useState(() => new Date().getFullYear().toString());
   const [newMediaType, setNewMediaType] = useState<"image" | "video">("image");
@@ -357,8 +358,16 @@ export function PortfolioAdmin() {
     const isVideo =
       file.type.startsWith("video/") || /\.(mp4|webm|mov|m4v|mkv|avi)$/i.test(file.name);
     setNewMediaType(isVideo ? "video" : "image");
+    const rawBase = file.name.replace(/\.[^/.]+$/, "");
+    const cleanDefaultTitle =
+      rawBase.replace(/[-_]+/g, " ").trim() || (isVideo ? "Studio Video" : "Studio Artwork");
+    if (!newTitle) {
+      setNewTitle(cleanDefaultTitle.charAt(0).toUpperCase() + cleanDefaultTitle.slice(1));
+    }
+
+    setIsModalFileUploading(true);
     setUploadPercent(10);
-    setUploadStatusText("Reading & streaming media...");
+    setUploadStatusText(`Uploading ${file.name}...`);
 
     try {
       const descriptors = await uploadMediaFilesToCms([file], (pct, text) => {
@@ -376,11 +385,12 @@ export function PortfolioAdmin() {
         if (!newTitle) {
           setNewTitle(desc.title.charAt(0).toUpperCase() + desc.title.slice(1));
         }
-        toast.success(`Loaded ${file.name}`);
+        toast.success(`Ready to publish ${file.name}`);
       }
     } catch {
-      toast.error("Failed to read file");
+      toast.error("Failed to upload file");
     } finally {
+      setIsModalFileUploading(false);
       window.setTimeout(() => {
         setUploadPercent(null);
         setUploadStatusText(null);
@@ -389,7 +399,17 @@ export function PortfolioAdmin() {
   };
 
   const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    if (files.length > 1) {
+      const batch = Array.from(files);
+      e.target.value = "";
+      setIsAddModalOpen(false);
+      void handleDirectDropFilesUpload(batch);
+      return;
+    }
+    const file = files[0];
+    e.target.value = "";
     if (!file) return;
     void processModalSelectedFile(file);
   };
@@ -403,6 +423,10 @@ export function PortfolioAdmin() {
 
   const handleCreateItem = async (e: FormEvent) => {
     e.preventDefault();
+    if (isModalFileUploading) {
+      toast.info("Please wait a moment for the media upload to finish...");
+      return;
+    }
     if (!newMediaUrl.trim()) {
       toast.error("Please provide an image or video file / URL");
       return;
@@ -1083,6 +1107,7 @@ export function PortfolioAdmin() {
                 <input
                   ref={fileInputRef}
                   type="file"
+                  multiple
                   accept="image/*,video/*"
                   onChange={handleFileUpload}
                   className="hidden"
@@ -1102,7 +1127,15 @@ export function PortfolioAdmin() {
                     e.preventDefault();
                     e.stopPropagation();
                     setIsModalDropzoneActive(false);
-                    const file = e.dataTransfer.files?.[0];
+                    const droppedFiles = e.dataTransfer.files;
+                    if (!droppedFiles || droppedFiles.length === 0) return;
+                    if (droppedFiles.length > 1) {
+                      const batch = Array.from(droppedFiles);
+                      setIsAddModalOpen(false);
+                      void handleDirectDropFilesUpload(batch);
+                      return;
+                    }
+                    const file = droppedFiles[0];
                     if (file) {
                       void processModalSelectedFile(file);
                     }
@@ -1115,8 +1148,16 @@ export function PortfolioAdmin() {
                   }`}
                 >
                   <UploadCloud className="h-5 w-5 text-emerald-400" />
-                  <span>Drag & Drop Video or Image Here, or Click to Browse</span>
+                  <span>Drag & Drop Video(s) or Image(s) Here, or Click to Browse</span>
                 </div>
+                {uploadPercent !== null && (
+                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      style={{ width: `${uploadPercent}%` }}
+                      className="h-full bg-emerald-400 transition-all duration-200"
+                    />
+                  </div>
+                )}
                 {uploadStatusText && (
                   <p className="mt-1 text-[0.68rem] text-emerald-400">{uploadStatusText}</p>
                 )}
@@ -1203,10 +1244,14 @@ export function PortfolioAdmin() {
                 </button>
                 <button
                   type="submit"
-                  disabled={syncing}
+                  disabled={syncing || isModalFileUploading}
                   className="rounded-xl bg-white px-5 py-2.5 text-xs font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
-                  {syncing ? "Publishing..." : "Publish to Showcase"}
+                  {isModalFileUploading
+                    ? `Uploading (${uploadPercent ?? 10}%)...`
+                    : syncing
+                      ? "Publishing..."
+                      : "Publish to Showcase"}
                 </button>
               </div>
             </form>

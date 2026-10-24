@@ -105,10 +105,55 @@ async function uploadBlobToSupabaseRest(
   storagePath: string,
   blob: Blob,
   contentType: string,
+  onProgress?: (fraction: number) => void,
 ): Promise<boolean> {
   const { url, key } = getSupabaseRestConfig();
+  const targetUrl = `${url}/storage/v1/object/${SUPABASE_BUCKET}/${storagePath}`;
+
+  if (typeof XMLHttpRequest !== "undefined") {
+    try {
+      const ok = await new Promise<boolean>((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", targetUrl, true);
+        xhr.setRequestHeader("apikey", key);
+        xhr.setRequestHeader("Content-Type", contentType || "application/octet-stream");
+        xhr.setRequestHeader("x-upsert", "false");
+
+        if (xhr.upload && onProgress) {
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable && event.total > 0) {
+              onProgress(Math.min(1, event.loaded / event.total));
+            }
+          };
+        }
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            onProgress?.(1);
+            resolve(true);
+            return;
+          }
+          const respText = (xhr.responseText || "").toLowerCase();
+          if (respText.includes("already exists") || respText.includes("duplicate")) {
+            onProgress?.(1);
+            resolve(true);
+            return;
+          }
+          resolve(false);
+        };
+
+        xhr.onerror = () => resolve(false);
+        xhr.onabort = () => resolve(false);
+        xhr.send(blob);
+      });
+      if (ok) return true;
+    } catch {
+      // Fall through to fetch
+    }
+  }
+
   try {
-    const res = await fetch(`${url}/storage/v1/object/${SUPABASE_BUCKET}/${storagePath}`, {
+    const res = await fetch(targetUrl, {
       method: "POST",
       headers: {
         apikey: key,
@@ -117,12 +162,16 @@ async function uploadBlobToSupabaseRest(
       },
       body: blob,
     });
-    if (res.ok) return true;
+    if (res.ok) {
+      onProgress?.(1);
+      return true;
+    }
     const errText = await res.text().catch(() => "");
     if (
       errText.toLowerCase().includes("already exists") ||
       errText.toLowerCase().includes("duplicate")
     ) {
+      onProgress?.(1);
       return true;
     }
   } catch {
@@ -261,7 +310,7 @@ const PERMANENTLY_PURGED_ITEM_IDS = new Set([
 ]);
 
 const PERMANENTLY_PURGED_MEDIA_PATTERN =
-  /(?:demo-reel-kinetic|demo-reel-story|demo-showreel|demo-vertical-reel|(?:^|[-/])edit-(?:1|15|18|24))\.(?:mp4|webm|mov)/i;
+  /(?:demo-reel-kinetic|demo-reel-story|demo-showreel|demo-vertical-reel|cms-1792(?:733|813|822)\d+-[a-z0-9]+-edit-(?:1|15|18|24))\.(?:mp4|webm|mov)/i;
 
 export function isPermanentlyPurgedMediaItem(
   item?: {
@@ -677,8 +726,11 @@ function openMediaIdb(): Promise<IDBDatabase | null> {
 }
 
 export async function saveMediaBlobToIdb(key: string, blob: Blob): Promise<string> {
-  const memUrl = URL.createObjectURL(blob);
-  objectUrlCache.set(key, memUrl);
+  const existingMemUrl = objectUrlCache.get(key);
+  const memUrl = existingMemUrl || URL.createObjectURL(blob);
+  if (!existingMemUrl) {
+    objectUrlCache.set(key, memUrl);
+  }
 
   const db = await openMediaIdb();
   if (db) {
@@ -728,6 +780,7 @@ export function getCmsKeySuffix(key: string): string {
 export async function getMediaBlobFromIdb(
   key: string,
 ): Promise<{ matchedKey: string; blob: Blob } | null> {
+  if (PERMANENTLY_PURGED_MEDIA_PATTERN.test(key)) return null;
   const db = await openMediaIdb();
   if (!db) return null;
 
@@ -753,7 +806,9 @@ export async function getMediaBlobFromIdb(
         const keysReq = objStore.getAllKeys();
         keysReq.onsuccess = () => {
           const allKeys = (keysReq.result ?? []).map((k) => String(k));
-          const candidateKey = allKeys.find((k) => getCmsKeySuffix(k) === targetSuffix);
+          const candidateKey = allKeys.find(
+            (k) => !PERMANENTLY_PURGED_MEDIA_PATTERN.test(k) && getCmsKeySuffix(k) === targetSuffix,
+          );
           if (!candidateKey) {
             resolve(null);
             return;
@@ -805,10 +860,15 @@ async function readIdbStoreBackup(): Promise<CanvasCmsStoreData | null> {
   });
 }
 
-async function uploadMediaBlobToSupabaseCloud(key: string, blob: Blob): Promise<string | null> {
-  if (!key || blob.size === 0 || blob.size > 50 * 1024 * 1024) return null;
+async function uploadMediaBlobToSupabaseCloud(
+  key: string,
+  blob: Blob,
+  onProgress?: (fraction: number) => void,
+): Promise<string | null> {
+  if (!key || blob.size === 0) return null;
   const cachedSigned = cloudSignedUrlCache.get(key);
   if (cachedSigned && cloudUploadedKeys.has(key)) {
+    onProgress?.(1);
     return cachedSigned;
   }
   try {
@@ -818,10 +878,12 @@ async function uploadMediaBlobToSupabaseCloud(key: string, blob: Blob): Promise<
         storagePath,
         blob,
         blob.type || "application/octet-stream",
+        onProgress,
       );
-      if (uploaded) {
-        markKeyCloudUploaded(key);
+      if (!uploaded) {
+        return null;
       }
+      markKeyCloudUploaded(key);
     }
     const signedUrl = await createSupabaseSignedUrlRest(storagePath, TWENTY_YEARS_SECONDS);
     if (signedUrl) {
@@ -838,7 +900,7 @@ export async function getCloudSignedUrlForMediaKey(
   key: string,
   forceRefresh = false,
 ): Promise<string | null> {
-  if (!key) return null;
+  if (!key || PERMANENTLY_PURGED_MEDIA_PATTERN.test(key)) return null;
   if (!forceRefresh) {
     const cachedSigned = cloudSignedUrlCache.get(key);
     if (cachedSigned) return cachedSigned;
@@ -856,7 +918,9 @@ export async function getCloudSignedUrlForMediaKey(
     if (suffix) {
       const objects = await listSupabaseSnapshotsRest("cms-1", 100);
       const matched = objects.find(
-        (obj) => obj.name.toLowerCase().endsWith(suffix) || getCmsKeySuffix(obj.name) === suffix,
+        (obj) =>
+          !PERMANENTLY_PURGED_MEDIA_PATTERN.test(obj.name) &&
+          (obj.name.toLowerCase().endsWith(suffix) || getCmsKeySuffix(obj.name) === suffix),
       );
       if (matched) {
         const fuzzySigned = await createSupabaseSignedUrlRest(
@@ -1314,7 +1378,7 @@ export async function measureUrlCanvasDimensions(
   });
 }
 
-const STREAM_CHUNK_SIZE_BYTES = 24 * 1024 * 1024; // 24 MB zero-copy slices
+const STREAM_CHUNK_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB chunks avoid reverse-proxy payload limits
 
 async function streamFileToServerWithChunks(
   file: File,
@@ -1368,7 +1432,11 @@ async function streamFileToServerWithChunks(
       },
     );
 
-    if (res.ok && chunkIndex === totalChunks - 1) {
+    if (!res.ok) {
+      return null;
+    }
+
+    if (chunkIndex === totalChunks - 1) {
       const data = (await res.json().catch(() => null)) as {
         files?: Array<{ url?: string }>;
       } | null;
@@ -1381,10 +1449,11 @@ async function streamFileToServerWithChunks(
 }
 
 /**
- * Instant zero-lag uploader for images and videos of any size (even 10-hour videos):
+ * Instant zero-lag uploader for images and videos of any size:
  * 1. Registers a zero-copy native `URL.createObjectURL(file)` in `objectUrlCache` in 0ms
  *    so the Showcase and CMS autoplay the video or render the image immediately with 0 RAM overhead.
- * 2. Persists to IndexedDB asynchronously and streams 24 MB slices to `/api/drive-media` + Supabase Cloud.
+ * 2. Persists to IndexedDB asynchronously and uploads to Supabase Cloud with live byte progress
+ *    (falling back to 2 MB server chunks if needed).
  */
 export async function uploadMediaFilesToCms(
   files: File[],
@@ -1395,7 +1464,22 @@ export async function uploadMediaFilesToCms(
   onProgress?.(5, "Reading media dimensions...");
   const measuredList = await Promise.all(files.map((file) => measureFileCanvasDimensions(file)));
   const results: UploadedMediaDescriptor[] = new Array(files.length);
+  const fileProgress = new Array<number>(files.length).fill(0);
   let completedCount = 0;
+
+  const reportOverallProgress = (activeFileName: string) => {
+    if (!onProgress) return;
+    const sum = fileProgress.reduce((acc, v) => acc + v, 0);
+    const avgFraction = sum / files.length;
+    const overallPct = Math.min(98, Math.max(8, Math.round(8 + avgFraction * 88)));
+    const filePct = Math.round(avgFraction * 100);
+    onProgress(
+      overallPct,
+      files.length === 1
+        ? `Uploading ${activeFileName} (${filePct}%)...`
+        : `Uploading ${activeFileName} (${completedCount + 1}/${files.length} · ${filePct}%)...`,
+    );
+  };
 
   const uploadSingleFile = async (index: number) => {
     const file = files[index];
@@ -1428,44 +1512,47 @@ export async function uploadMediaFilesToCms(
     // 2. Persist binary File in IndexedDB asynchronously
     void saveMediaBlobToIdb(localKey, file).catch(() => {});
 
-    onProgress?.(
-      Math.min(92, Math.round(10 + (completedCount / files.length) * 80)),
-      `Uploading ${file.name} (${completedCount + 1}/${files.length})...`,
-    );
+    reportOverallProgress(file.name);
 
-    // 3. Upload to server disk and Supabase Cloud with 20-year signed URL
-    const serverUploadPromise = streamFileToServerWithChunks(file, localKey)
-      .then((serverUrl) => {
-        if (serverUrl && serverUrl.startsWith("https://")) {
-          markKeyCloudUploaded(localKey, serverUrl);
-          applyUpgradedMediaUrlsToStore({ [localKey]: serverUrl });
+    // 3. Upload directly to permanent Supabase Cloud storage with live byte-level progress
+    let durableUrl: string | null = await uploadMediaBlobToSupabaseCloud(
+      localKey,
+      file,
+      (fraction) => {
+        fileProgress[index] = fraction;
+        reportOverallProgress(file.name);
+      },
+    ).catch(() => null);
+
+    // 4. Fallback to 2 MB chunked server stream if direct cloud upload was blocked/unavailable
+    if (!durableUrl || !durableUrl.startsWith("https://")) {
+      const srvUrl = await streamFileToServerWithChunks(file, localKey, (pct) => {
+        fileProgress[index] = pct / 100;
+        reportOverallProgress(file.name);
+      }).catch(() => null);
+      if (srvUrl) {
+        durableUrl = srvUrl;
+        if (srvUrl.startsWith("https://")) {
+          markKeyCloudUploaded(localKey, srvUrl);
         }
-        return serverUrl;
-      })
-      .catch(() => null);
-
-    let durableUrl: string | null = null;
-    if (file.size <= 50 * 1024 * 1024) {
-      const cloudUrl = await uploadMediaBlobToSupabaseCloud(localKey, file).catch(() => null);
-      if (cloudUrl && cloudUrl.startsWith("https://")) {
-        durableUrl = cloudUrl;
-      } else {
-        const srvUrl = await serverUploadPromise;
-        if (srvUrl) durableUrl = srvUrl;
       }
     } else {
-      const srvUrl = await serverUploadPromise;
-      if (srvUrl) durableUrl = srvUrl;
+      // Also mirror small/medium files to local server disk in the background without blocking
+      if (file.size <= 32 * 1024 * 1024) {
+        void streamFileToServerWithChunks(file, localKey).catch(() => {});
+      }
     }
+
+    fileProgress[index] = 1;
+    completedCount += 1;
 
     const finalUrl =
       durableUrl ||
       cloudSignedUrlCache.get(localKey) ||
       `/api/drive-media?local=${encodeURIComponent(localKey)}`;
 
-    completedCount += 1;
     onProgress?.(
-      Math.min(98, Math.round(10 + (completedCount / files.length) * 88)),
+      Math.min(99, Math.round(10 + (completedCount / files.length) * 88)),
       `Uploaded ${completedCount} of ${files.length} (${file.name})`,
     );
 
@@ -1478,8 +1565,9 @@ export async function uploadMediaFilesToCms(
     };
   };
 
-  // Run up to 4 concurrent uploads so batch drops of 40+ files finish quickly without browser socket exhaustion
-  const concurrency = Math.min(4, files.length);
+  // Use 2 concurrent workers when uploading large video files so upstream bandwidth isn't choked
+  const hasLargeVideo = files.some((f) => f.size > 10 * 1024 * 1024 || f.type.startsWith("video/"));
+  const concurrency = Math.min(hasLargeVideo ? 2 : 4, files.length);
   let nextIndex = 0;
   const workers = Array.from({ length: concurrency }, async () => {
     while (nextIndex < files.length) {

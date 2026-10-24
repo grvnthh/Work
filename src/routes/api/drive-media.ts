@@ -154,7 +154,9 @@ async function getSupabaseStorageSignedUrl(
   if (suffix) {
     const objects = await listServerSupabaseSnapshots("cms-1", 100);
     const matched = objects.find(
-      (obj) => obj.name.toLowerCase().endsWith(suffix) || getCmsKeySuffix(obj.name) === suffix,
+      (obj) =>
+        !isPermanentlyPurgedMediaItem({ videoUrl: obj.name }) &&
+        (obj.name.toLowerCase().endsWith(suffix) || getCmsKeySuffix(obj.name) === suffix),
     );
     if (matched) {
       const fuzzySigned = await createServerSupabaseSignedUrl(`inquiries/${matched.name}`);
@@ -1100,16 +1102,19 @@ export const Route = createFileRoute("/api/drive-media")({
                 .replace(/^-+|-+$/g, "")
                 .slice(0, 42) || "media";
 
+            const safeUploadId = uploadId
+              ? uploadId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 36)
+              : `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
             const uniqueName = requestedLocalKey
               ? path.basename(requestedLocalKey)
-              : `cms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${safeSlug}${safeExt}`;
+              : `cms-${safeUploadId}-${safeSlug}${safeExt}`;
             const resolvedMime = fileType || getMimeTypeFromExt(safeExt);
             const targetFilePath = path.join(cmsMediaDir, uniqueName);
 
             if (isChunked) {
               const chunkIndex = parseInt(chunkIndexParam!, 10);
               const totalChunks = parseInt(totalChunksParam!, 10);
-              await saveStreamOrBuffer(
+              const chunkBuffer = await saveStreamOrBuffer(
                 request.body,
                 [targetFilePath],
                 uniqueName,
@@ -1117,6 +1122,15 @@ export const Route = createFileRoute("/api/drive-media")({
                 uniqueName,
                 chunkIndex > 0,
               );
+
+              const chunkMap = getChunkMap();
+              if (chunkIndex === 0) {
+                chunkMap.set(uniqueName, chunkBuffer ? [chunkBuffer] : []);
+              } else if (chunkBuffer) {
+                const existing = chunkMap.get(uniqueName) ?? [];
+                existing.push(chunkBuffer);
+                chunkMap.set(uniqueName, existing);
+              }
 
               if (chunkIndex < totalChunks - 1) {
                 return Response.json({
@@ -1127,22 +1141,42 @@ export const Route = createFileRoute("/api/drive-media")({
                 });
               }
 
-              let cloudSignedUrl: string | null = null;
+              const accumulated = chunkMap.get(uniqueName);
+              chunkMap.delete(uniqueName);
+
+              let fullBuf: Buffer | null = null;
               try {
                 if (fs.existsSync(targetFilePath)) {
                   const stat = fs.statSync(targetFilePath);
-                  if (stat.size > 0 && stat.size <= 50 * 1024 * 1024) {
-                    const fullBuf = fs.readFileSync(targetFilePath);
-                    cloudSignedUrl = await uploadBufferToSupabaseStorage(
-                      "cms",
-                      uniqueName,
-                      fullBuf,
-                      resolvedMime,
-                    );
+                  if (stat.size > 0 && stat.size <= 256 * 1024 * 1024) {
+                    fullBuf = fs.readFileSync(targetFilePath);
                   }
                 }
               } catch {
-                // Ignore optional cloud upload error for large files
+                // Ignore fs read error
+              }
+              if (!fullBuf && accumulated && accumulated.length > 0) {
+                fullBuf = Buffer.concat(accumulated);
+              }
+
+              if (fullBuf && fullBuf.byteLength <= 128 * 1024 * 1024) {
+                getMemoryMediaMap().set(uniqueName, {
+                  buffer: fullBuf,
+                  mimeType: resolvedMime,
+                  filename: uniqueName,
+                });
+              }
+
+              let cloudSignedUrl: string | null = await createServerSupabaseSignedUrl(
+                `inquiries/${uniqueName}`,
+              );
+              if (!cloudSignedUrl && fullBuf && fullBuf.byteLength > 0) {
+                cloudSignedUrl = await uploadBufferToSupabaseStorage(
+                  "cms",
+                  uniqueName,
+                  fullBuf,
+                  resolvedMime,
+                );
               }
 
               return Response.json({
@@ -1167,8 +1201,10 @@ export const Route = createFileRoute("/api/drive-media")({
               uniqueName,
             );
 
-            let cloudSignedUrl: string | null = null;
-            if (savedCmsBuffer && savedCmsBuffer.byteLength <= 50 * 1024 * 1024) {
+            let cloudSignedUrl: string | null = await createServerSupabaseSignedUrl(
+              `inquiries/${uniqueName}`,
+            );
+            if (!cloudSignedUrl && savedCmsBuffer && savedCmsBuffer.byteLength > 0) {
               cloudSignedUrl = await uploadBufferToSupabaseStorage(
                 "cms",
                 uniqueName,
