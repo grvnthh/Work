@@ -129,14 +129,20 @@ const ShowcaseItemCard = memo(function ShowcaseItemCard({
 
 export function Showcase() {
   const [cmsProjects, setCmsProjects] = useState<PortfolioCanvasProject[]>(() => {
-    const localStore = readLocalCmsStore();
-    return buildResolvedCanvasItemsFromStore(localStore).items;
+    return buildResolvedCanvasItemsFromStore(null).items;
   });
   const [filter, setFilter] = useState<"all" | "video" | "image">("all");
   const [unmutedItemId, setUnmutedItemId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
+
+    // Sync from local storage on client mount
+    const localStore = readLocalCmsStore();
+    const resolvedLocal = buildResolvedCanvasItemsFromStore(localStore).items;
+    if (resolvedLocal.length > 0) {
+      setCmsProjects(resolvedLocal);
+    }
 
     const syncFromStore = async () => {
       try {

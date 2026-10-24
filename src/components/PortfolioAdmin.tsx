@@ -52,15 +52,21 @@ const AUTH_STORAGE_KEY = "grvnth_cms_auth_token_v8";
 const ADMIN_PASSCODE = "Granth@246";
 
 export function PortfolioAdmin() {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return Boolean(
-      window.localStorage.getItem(AUTH_STORAGE_KEY) ||
-      window.sessionStorage.getItem(AUTH_STORAGE_KEY),
-    );
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [passcodeInput, setPasscodeInput] = useState("");
   const [authError, setAuthError] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const authed = Boolean(
+        window.localStorage.getItem(AUTH_STORAGE_KEY) ||
+        window.sessionStorage.getItem(AUTH_STORAGE_KEY),
+      );
+      if (authed) {
+        setIsAuthenticated(true);
+      }
+    }
+  }, []);
 
   const [items, setItems] = useState<PortfolioCanvasProject[]>([]);
   const [loading, setLoading] = useState(true);

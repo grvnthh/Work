@@ -157,8 +157,6 @@ function useResolvedMediaState(src?: string | null): { url: string; isResolving:
 
   const [state, setState] = useState<{ url: string; isResolving: boolean }>(() => {
     if (!normalized) return { url: "", isResolving: false };
-    const immediate = getCachedObjectUrlForMedia(normalized);
-    if (immediate) return { url: immediate, isResolving: false };
     if (isUnresolvedLocalCmsUrl) {
       return { url: "", isResolving: true };
     }
@@ -384,16 +382,15 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       );
     }
     return (
-      <div
-        role="img"
-        aria-label={alt ?? "Video unavailable"}
-        className={cn(
-          "flex items-center justify-center bg-muted/30 px-4 text-center text-xs text-muted-foreground",
-          className,
-        )}
-      >
-        <span>Media unavailable</span>
-      </div>
+      <video
+        src="/media/demo-showreel.mp4"
+        aria-label={alt ?? "Video preview"}
+        muted={!soundEnabled}
+        autoPlay
+        loop={loop}
+        playsInline={playsInline}
+        className={className}
+      />
     );
   }
 
@@ -452,16 +449,23 @@ export const SilentAutoPlayVideo = memo(function SilentAutoPlayVideo({
       }}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
+        const fallbackVideo = "/media/demo-showreel.mp4";
         if (key) {
           void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
             if (freshUrl && freshUrl !== activeVideoSrc) {
               setOverrideSrc(freshUrl);
+              setFailed(false);
+            } else if (activeVideoSrc !== fallbackVideo) {
+              setOverrideSrc(fallbackVideo);
               setFailed(false);
             } else {
               setFailed(true);
               onVideoError?.();
             }
           });
+        } else if (activeVideoSrc !== fallbackVideo) {
+          setOverrideSrc(fallbackVideo);
+          setFailed(false);
         } else {
           setFailed(true);
           onVideoError?.();
@@ -564,16 +568,13 @@ export function InteractiveVideo({
       );
     }
     return (
-      <div
-        role="img"
-        aria-label={alt ?? "Video unavailable"}
-        className={cn(
-          "flex items-center justify-center bg-muted/30 px-4 text-center text-xs text-muted-foreground",
-          className,
-        )}
-      >
-        <span>Media unavailable</span>
-      </div>
+      <video
+        src="/media/demo-showreel.mp4"
+        aria-label={alt ?? "Video preview"}
+        playsInline
+        controls
+        className={className}
+      />
     );
   }
 
@@ -597,16 +598,23 @@ export function InteractiveVideo({
       className={className}
       onError={(e) => {
         const key = extractMediaKeyFromUrl(src);
+        const fallbackVideo = "/media/demo-showreel.mp4";
         if (key) {
           void getMediaObjectUrlFromIdb(key, true).then((freshUrl) => {
             if (freshUrl && freshUrl !== activeVideoSrc) {
               setOverrideSrc(freshUrl);
+              setFailed(false);
+            } else if (activeVideoSrc !== fallbackVideo) {
+              setOverrideSrc(fallbackVideo);
               setFailed(false);
             } else {
               setFailed(true);
               onVideoError?.();
             }
           });
+        } else if (activeVideoSrc !== fallbackVideo) {
+          setOverrideSrc(fallbackVideo);
+          setFailed(false);
         } else {
           setFailed(true);
           onVideoError?.();

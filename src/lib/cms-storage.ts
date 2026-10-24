@@ -662,7 +662,7 @@ export function normalizeCmsMediaUrl(url?: string | null): string {
   return trimmed;
 }
 
-function getCmsKeySuffix(key: string): string {
+export function getCmsKeySuffix(key: string): string {
   return key.replace(/^cms-\d+-[a-z0-9]+-/i, "").toLowerCase();
 }
 
@@ -791,6 +791,25 @@ export async function getCloudSignedUrlForMediaKey(
     if (signedUrl) {
       markKeyCloudUploaded(key, signedUrl);
       return signedUrl;
+    }
+
+    const suffix = getCmsKeySuffix(key);
+    if (suffix) {
+      const objects = await listSupabaseSnapshotsRest("", 100);
+      const matched = objects.find(
+        (obj) => obj.name.toLowerCase().endsWith(suffix) || getCmsKeySuffix(obj.name) === suffix,
+      );
+      if (matched) {
+        const fuzzySigned = await createSupabaseSignedUrlRest(
+          `inquiries/${matched.name}`,
+          TEN_YEARS_SECONDS,
+        );
+        if (fuzzySigned) {
+          markKeyCloudUploaded(key, fuzzySigned);
+          markKeyCloudUploaded(matched.name, fuzzySigned);
+          return fuzzySigned;
+        }
+      }
     }
   } catch {
     // Ignore cloud lookup error
