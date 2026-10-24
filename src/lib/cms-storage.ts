@@ -524,11 +524,12 @@ function findDistinctRandomCanvasPosition(
  * so the CMS grid coordinates and Canvas coordinates are 100% identical.
  */
 export function settleStoreNonOverlappingPositions(
-  store: CanvasCmsStoreData,
+  store?: CanvasCmsStoreData | Partial<CanvasCmsStoreData> | null,
   priorityIds: string[] = [],
 ): void {
-  if (priorityIds.length === 0) return;
-  const { items } = buildResolvedCanvasItemsFromStore(store);
+  if (!store || priorityIds.length === 0) return;
+  const safeStore = normalizeStore(store);
+  const { items } = buildResolvedCanvasItemsFromStore(safeStore);
   const prioritySet = new Set(priorityIds);
   // Keep all existing items locked in place first; only adjust the newly added/moved priorityIds if needed
   const lockedExisting = [
@@ -539,29 +540,32 @@ export function settleStoreNonOverlappingPositions(
   const settled = resolveNonOverlappingProjects(lockedExisting, undefined, 68);
   const settledMap = new Map(settled.map((item) => [item.id, item]));
 
-  for (let i = 0; i < store.addedItems.length; i += 1) {
-    const id = store.addedItems[i].id;
-    if (!prioritySet.has(id)) continue;
-    const updated = settledMap.get(id);
-    if (updated) {
-      store.addedItems[i] = {
-        ...store.addedItems[i],
-        canvasX: updated.canvasX,
-        canvasY: updated.canvasY,
-      };
+  if (Array.isArray(store.addedItems)) {
+    for (let i = 0; i < store.addedItems.length; i += 1) {
+      const id = store.addedItems[i].id;
+      if (!prioritySet.has(id)) continue;
+      const updated = settledMap.get(id);
+      if (updated) {
+        store.addedItems[i] = {
+          ...store.addedItems[i],
+          canvasX: updated.canvasX,
+          canvasY: updated.canvasY,
+        };
+      }
     }
   }
 }
 
 export function buildResolvedCanvasItemsFromStore(
-  store: CanvasCmsStoreData,
+  store?: CanvasCmsStoreData | Partial<CanvasCmsStoreData> | null,
 ): ResolvedCanvasCmsState {
-  const deletedSet = new Set(store.deletedIds);
+  const safeStore = normalizeStore(store);
+  const deletedSet = new Set(safeStore.deletedIds);
 
   const resolvedAdded: PortfolioCanvasProject[] = [];
-  for (const item of store.addedItems) {
+  for (const item of safeStore.addedItems) {
     if (deletedSet.has(item.id)) continue;
-    const override = store.overrides[item.id];
+    const override = safeStore.overrides[item.id];
     const merged: PortfolioCanvasProject = override
       ? {
           ...item,
@@ -586,9 +590,9 @@ export function buildResolvedCanvasItemsFromStore(
   return {
     items: itemsToReturn,
     deletedDefaultCount: 0,
-    updatedAt: store.updatedAt,
-    lastFocusedId: store.lastFocusedId,
-    store,
+    updatedAt: safeStore.updatedAt,
+    lastFocusedId: safeStore.lastFocusedId,
+    store: safeStore,
   };
 }
 
