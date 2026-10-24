@@ -1800,7 +1800,9 @@ export function mutateAddCanvasItems(
     const primaryUrl = raw.imageUrl || raw.videoUrl || "/media/showcase-album-2.png";
     const itemId = raw.id || `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     newestId = itemId;
-    newPriorityIds.push(itemId);
+    if (typeof raw.canvasX !== "number" || typeof raw.canvasY !== "number") {
+      newPriorityIds.push(itemId);
+    }
 
     const created: PortfolioCanvasProject = {
       id: itemId,
@@ -1827,6 +1829,46 @@ export function mutateAddCanvasItems(
 
   settleStoreNonOverlappingPositions(store, newPriorityIds);
   const saved = writeLocalCmsStore(store, newestId);
+  void pushStoreToServer(saved);
+  return buildResolvedCanvasItemsFromStore(saved);
+}
+
+export function mutateSwapCanvasItemPositions(idA: string, idB: string): ResolvedCanvasCmsState {
+  if (idA === idB) {
+    return buildResolvedCanvasItemsFromStore(readLocalCmsStore());
+  }
+  const store = readLocalCmsStore();
+  const { items: currentItems } = buildResolvedCanvasItemsFromStore(store);
+  const itemA = currentItems.find((i) => i.id === idA);
+  const itemB = currentItems.find((i) => i.id === idB);
+  if (!itemA || !itemB) {
+    return buildResolvedCanvasItemsFromStore(store);
+  }
+
+  const posA = { canvasX: itemA.canvasX, canvasY: itemA.canvasY };
+  const posB = { canvasX: itemB.canvasX, canvasY: itemB.canvasY };
+
+  const applyPos = (id: string, pos: { canvasX: number; canvasY: number }) => {
+    const idx = store.addedItems.findIndex((item) => item.id === id);
+    if (idx !== -1) {
+      store.addedItems[idx] = {
+        ...store.addedItems[idx],
+        canvasX: pos.canvasX,
+        canvasY: pos.canvasY,
+      };
+    } else {
+      store.overrides[id] = {
+        ...(store.overrides[id] ?? {}),
+        canvasX: pos.canvasX,
+        canvasY: pos.canvasY,
+      };
+    }
+  };
+
+  applyPos(idA, posB);
+  applyPos(idB, posA);
+
+  const saved = writeLocalCmsStore(store, idA);
   void pushStoreToServer(saved);
   return buildResolvedCanvasItemsFromStore(saved);
 }
