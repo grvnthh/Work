@@ -55,73 +55,65 @@ const ShowcaseItemCard = memo(function ShowcaseItemCard({
         {isVideo && videoSrc ? (
           <SilentAutoPlayVideo
             src={videoSrc}
-            alt={project.title}
+            alt=""
             soundEnabled={isSoundOn}
             className="h-full w-full object-cover"
           />
         ) : (
           <MediaImage
             src={project.imageUrl}
-            alt={project.title}
+            alt=""
             maxRenderDimension={960}
             className="h-full w-full object-cover"
           />
         )}
 
-        {/* Subtle bottom info & Sound Toggle for Videos (No preview modal) */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 bg-gradient-to-t from-black/80 via-black/30 to-transparent p-4">
-          <div className="min-w-0 flex-1">
-            {project.title && (
-              <h3 className="truncate font-display text-sm font-medium text-white/95 drop-shadow-xs">
-                {project.title}
-              </h3>
-            )}
-            {project.year && <p className="mt-0.5 text-[0.68rem] text-white/60">{project.year}</p>}
-          </div>
+        {(isVideo || project.externalUrl) && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-end gap-3 bg-gradient-to-t from-black/80 via-black/30 to-transparent p-4">
+            <div className="pointer-events-auto flex shrink-0 items-center gap-2">
+              {project.externalUrl && (
+                <a
+                  href={project.externalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  title="Open project link"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-black/75 text-white/80 backdrop-blur-md transition-colors hover:border-white/40 hover:text-white"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              )}
 
-          <div className="pointer-events-auto flex shrink-0 items-center gap-2">
-            {project.externalUrl && (
-              <a
-                href={project.externalUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                title="Open project link"
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-black/75 text-white/80 backdrop-blur-md transition-colors hover:border-white/40 hover:text-white"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
-            )}
-
-            {isVideo && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleSound(project.id);
-                }}
-                aria-label={isSoundOn ? "Mute sound" : "Play sound"}
-                className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium backdrop-blur-md transition-all ${
-                  isSoundOn
-                    ? "border-emerald-400/60 bg-emerald-500/25 text-emerald-200 shadow-lg"
-                    : "border-white/15 bg-black/75 text-white/90 hover:border-white/40 hover:bg-black/90"
-                }`}
-              >
-                {isSoundOn ? (
-                  <>
-                    <Volume2 className="h-3.5 w-3.5 text-emerald-300" />
-                    <span>Sound On</span>
-                  </>
-                ) : (
-                  <>
-                    <VolumeX className="h-3.5 w-3.5 text-white/75" />
-                    <span>Play Sound</span>
-                  </>
-                )}
-              </button>
-            )}
+              {isVideo && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleSound(project.id);
+                  }}
+                  aria-label={isSoundOn ? "Mute sound" : "Play sound"}
+                  className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium backdrop-blur-md transition-all ${
+                    isSoundOn
+                      ? "border-emerald-400/60 bg-emerald-500/25 text-emerald-200 shadow-lg"
+                      : "border-white/15 bg-black/75 text-white/90 hover:border-white/40 hover:bg-black/90"
+                  }`}
+                >
+                  {isSoundOn ? (
+                    <>
+                      <Volume2 className="h-3.5 w-3.5 text-emerald-300" />
+                      <span>Sound On</span>
+                    </>
+                  ) : (
+                    <>
+                      <VolumeX className="h-3.5 w-3.5 text-white/75" />
+                      <span>Play Sound</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </article>
   );
